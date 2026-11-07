@@ -124,6 +124,7 @@ class MainActivity : Activity() {
 
     private var btTicks = 0
     private var wasPlaying = false
+    private var showingBt = false
     private var canSpeed: Int? = null
     private var gpsSpeed: Float? = null
     private var canAlive = false
@@ -670,6 +671,15 @@ class MainActivity : Activity() {
         mediaSessions()?.firstOrNull { it.packageName == GocBt.PKG }
 
     private fun btMedia(code: Int) {
+        val sub = when (code) {
+            KeyEvent.KEYCODE_MEDIA_PREVIOUS -> KswCar.BT_PREV
+            KeyEvent.KEYCODE_MEDIA_NEXT -> KswCar.BT_NEXT
+            else -> if (btMusic.playing == true) KswCar.BT_PAUSE else KswCar.BT_PLAY
+        }
+        if (gocBt.connected != false && KswCar.bt(sub)) {
+            handler.postDelayed({ refreshBt(); refreshMedia() }, 500)
+            return
+        }
         val c = btSession()
         if (c != null) {
             when (code) {
@@ -723,10 +733,12 @@ class MainActivity : Activity() {
         val dur = md?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L
         var pos = st?.position ?: 0L
         if (playing && st != null) pos += ((SystemClock.elapsedRealtime() - st.lastPositionUpdateTime) * st.playbackSpeed).toLong()
-        btSeek.active = dur > 0
-        btSeek.fraction = if (dur > 0) pos.toFloat() / dur else 0f
-        btPos.text = fmt(pos.coerceAtLeast(0))
-        btDur.text = if (dur > 0) fmt(dur) else "0:00"
+        val bDur = if (dur > 0) dur else btMusic.durSec * 1000L
+        val bPos = if (dur > 0) pos else btMusic.posSec * 1000L
+        btSeek.active = bDur > 0
+        btSeek.fraction = if (bDur > 0) bPos.toFloat() / bDur else 0f
+        btPos.text = fmt(bPos.coerceAtLeast(0))
+        btDur.text = if (bDur > 0) fmt(bDur) else "0:00"
         btConnectLabel.text = if (conn == true) "Телефоны" else "Подключить"
     }
 
@@ -933,6 +945,7 @@ class MainActivity : Activity() {
     }
 
     private fun mediaAction(code: Int) {
+        if (showingBt) { btMedia(code); return }
         val c = controller
         if (c != null) {
             when (code) {
@@ -946,6 +959,7 @@ class MainActivity : Activity() {
     }
 
     private fun togglePlay() {
+        if (showingBt) { btMedia(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE); return }
         val c = controller
         if (c != null) {
             if (isPlaying) c.transportControls.pause() else c.transportControls.play()
@@ -973,6 +987,7 @@ class MainActivity : Activity() {
 
         val c = pickSession(sessions)
         controller = c
+        showingBt = false
         // A phone/app track started playing while the Bluetooth view is open: show it.
         val nowPlaying = c?.playbackState?.state == PlaybackState.STATE_PLAYING
         if (nowPlaying && btMode && !wasPlaying) setBtMode(false)
@@ -1019,6 +1034,7 @@ class MainActivity : Activity() {
         val t = btMusic.title ?: return false
         if (gocBt.connected == false || btMusic.playing == null && System.currentTimeMillis() - btMusic.updated > 15 * 60_000L) return false
         controller = sessions.firstOrNull { it.packageName == GocBt.PKG }
+        showingBt = true
         isPlaying = btMusic.playing != false
         trackTitle.text = t
         trackArtist.text = "Bluetooth · телефон"
@@ -1029,9 +1045,10 @@ class MainActivity : Activity() {
             artImage.visibility = View.GONE
             artPlaceholder.visibility = View.VISIBLE
         }
-        seek.active = false
-        positionText.text = ""
-        durationText.text = ""
+        seek.active = btMusic.durSec > 0
+        seek.fraction = if (btMusic.durSec > 0) btMusic.posSec.toFloat() / btMusic.durSec else 0f
+        positionText.text = fmt(btMusic.posSec * 1000L)
+        durationText.text = if (btMusic.durSec > 0) fmt(btMusic.durSec * 1000L) else ""
         return true
     }
 

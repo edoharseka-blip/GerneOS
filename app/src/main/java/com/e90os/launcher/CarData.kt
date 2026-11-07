@@ -55,6 +55,33 @@ object KswCar {
         }
     }
 
+    private const val TX_SEND_COMMAND = 1
+
+    /** KSW WitsCommand: {"command":type,"subCommand":sub}. BT music: type 3, prev 100, next 101, play 103, pause 104. */
+    fun sendCommand(type: Int, sub: Int): Boolean {
+        val b = service() ?: return false
+        val data = Parcel.obtain()
+        val reply = Parcel.obtain()
+        return try {
+            data.writeInterfaceToken(DESCRIPTOR)
+            data.writeString("{\"command\":$type,\"subCommand\":$sub,\"jsonArg\":\"\",\"needResult\":false}")
+            b.transact(TX_SEND_COMMAND, data, reply, 0)
+            reply.readException()
+            reply.readInt() != 0
+        } catch (e: Exception) {
+            false
+        } finally {
+            data.recycle()
+            reply.recycle()
+        }
+    }
+
+    const val BT_PREV = 100
+    const val BT_NEXT = 101
+    const val BT_PLAY = 103
+    const val BT_PAUSE = 104
+    fun bt(sub: Int) = sendCommand(3, sub)
+
     fun read(): CarState? {
         val json = statusString("mcuJson") ?: return null
         return runCatching {

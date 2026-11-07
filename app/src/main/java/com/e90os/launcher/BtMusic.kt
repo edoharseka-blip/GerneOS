@@ -24,6 +24,8 @@ class BtMusic(private val context: Context, private val onChange: () -> Unit) {
     var title: String? = null; private set
     var playing: Boolean? = null; private set
     var updated = 0L; private set
+    var posSec = 0; private set
+    var durSec = 0; private set
 
     private val main = Handler(Looper.getMainLooper())
     @Volatile private var running = false
@@ -59,13 +61,24 @@ class BtMusic(private val context: Context, private val onChange: () -> Unit) {
         if (receiverOn) { runCatching { context.unregisterReceiver(statusReceiver) }; receiverOn = false }
     }
 
+    private val posRe = Regex("""onMusicPos pos (\d+)/(\d+)""")
+
     private fun handle(line: String) {
+        when {
+            line.contains("onMusicPlaying") -> { main.post { playing = true; onChange() }; return }
+            line.contains("onMusicStopped") -> { main.post { playing = false; onChange() }; return }
+        }
+        posRe.find(line)?.let { m ->
+            val p = m.groupValues[1].toInt(); val d = m.groupValues[2].toInt()
+            main.post { posSec = p; durSec = d; if (playing == null) playing = true; onChange() }
+            return
+        }
         val i = line.indexOf("onMusicInfo")
         if (i < 0) return
         val t = line.substring(i + "onMusicInfo".length).trim()
         if (t.isEmpty()) return
         main.post {
-            if (t != title) { title = t; updated = System.currentTimeMillis(); onChange() }
+            if (t != title) { title = t; posSec = 0; updated = System.currentTimeMillis(); onChange() }
         }
     }
 
@@ -74,7 +87,14 @@ class BtMusic(private val context: Context, private val onChange: () -> Unit) {
             // Last known title first, then follow new lines.
             Runtime.getRuntime().exec(arrayOf("logcat", "-d", "-v", "raw", "-s", "gocImpl:I")).let { p ->
                 BufferedReader(InputStreamReader(p.inputStream)).useLines { lines ->
-                    lines.lastOrNull { it.contains("onMusicInfo") }?.let { handle(it) }
+                    var lastInfo: String? = null
+                    var lastState: String? = null
+                    lines.forEach {
+                        if (it.contains("onMusicInfo")) lastInfo = it
+                        if (it.contains("onMusicPlaying") || it.contains("onMusicStopped")) lastState = it
+                    }
+                    lastInfo?.let { handle(it) }
+                    lastState?.let { handle(it) }
                 }
             }
             val p = Runtime.getRuntime().exec(arrayOf("logcat", "-T", "1", "-v", "raw", "-s", "gocImpl:I"))
