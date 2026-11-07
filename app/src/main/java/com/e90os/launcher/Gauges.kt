@@ -154,6 +154,36 @@ class GaugeView(
     }
 }
 
+/** Track progress line with a round knob. */
+class SeekLine(context: Context) : View(context) {
+    var fraction: Float = 0f
+        set(v) { field = v.coerceIn(0f, 1f); invalidate() }
+    var active: Boolean = false
+        set(v) { field = v; invalidate() }
+
+    private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeCap = Paint.Cap.ROUND }
+    private val d = resources.displayMetrics.density
+
+    override fun onDraw(canvas: Canvas) {
+        val knob = 7 * d
+        val y = height / 2f
+        val x0 = knob
+        val x1 = width - knob
+        val x = x0 + (x1 - x0) * fraction
+        p.strokeWidth = 4 * d
+        p.color = Color.parseColor("#3A2E24")
+        canvas.drawLine(x0, y, x1, y, p)
+        if (!active) return
+        p.color = Color.parseColor("#F3A43D")
+        canvas.drawLine(x0, y, x, y, p)
+        p.setShadowLayer(6 * d, 0f, 0f, Color.parseColor("#F3A43D"))
+        canvas.drawCircle(x, y, knob, p)
+        p.clearShadowLayer()
+    }
+
+    init { setLayerType(LAYER_TYPE_SOFTWARE, null) }
+}
+
 /** Segmented level bar; [fraction] = null draws all segments dimmed. */
 class SegmentBar(context: Context, private val segments: Int = 10) : View(context) {
     var fraction: Float? = null
@@ -167,11 +197,15 @@ class SegmentBar(context: Context, private val segments: Int = 10) : View(contex
         val gap = 3 * d
         val w = (width - gap * (segments - 1)) / segments
         val lit = ((fraction ?: 0f).coerceIn(0f, 1f) * segments).toInt()
+        val skew = height * 0.35f
+        val path = android.graphics.Path()
         for (i in 0 until segments) {
             val x = i * (w + gap)
-            r.set(x, 0f, x + w, height.toFloat())
+            path.reset()
+            path.moveTo(x + skew, 0f); path.lineTo(x + w, 0f)
+            path.lineTo(x + w - skew, height.toFloat()); path.lineTo(x, height.toFloat()); path.close()
             p.color = Color.parseColor(if (fraction != null && i < lit) "#F3A43D" else "#2E2318")
-            canvas.drawRoundRect(r, 2 * d, 2 * d, p)
+            canvas.drawPath(path, p)
         }
     }
 }

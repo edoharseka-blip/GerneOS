@@ -2,22 +2,24 @@ package com.e90os.launcher
 
 import android.Manifest
 import android.app.Activity
-import android.content.pm.PackageManager
-import android.location.Location
-import android.location.LocationListener
-import android.location.LocationManager
 import android.app.AlertDialog
+import android.bluetooth.BluetoothAdapter
 import android.content.ComponentName
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
 import android.media.AudioManager
 import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
+import android.net.wifi.WifiManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -26,6 +28,7 @@ import android.provider.Settings
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -40,74 +43,79 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * E90 OS COCKPIT home screen for a 1280x480 head unit.
- * Side navigation, now-playing card driven by Android media sessions,
- * on-board computer panel (vehicle values need a verified CAN source),
- * four configurable quick-access shortcuts, app grid and settings.
+ * E90 OS COCKPIT launcher for a 1280x480 head unit.
+ * Tabs: Главная (player, on-board computer, quick access), Музыка and Карта (launch the
+ * chosen apps), Авто (gauges), Настройки. Vehicle values need a verified CAN source and
+ * show a dash until one exists; speed on the Авто tab comes from GPS.
  */
 class MainActivity : Activity() {
 
     // Palette
     private val bg = "#080706"
-    private val panel = "#15110F"
-    private val panelHi = "#1E1813"
+    private val panel = "#14100D"
+    private val panelHi = "#1B1511"
     private val edge = "#3A2A1C"
     private val edgeHi = "#76502A"
     private val amber = "#F3A43D"
-    private val amberDeep = "#71400E"
     private val text = "#F7EEE4"
+    private val soft = "#E2D6CA"
     private val muted = "#B6A99B"
     private val dim = "#7A6E62"
 
     private val handler = Handler(Looper.getMainLooper())
     private val timeFmt = SimpleDateFormat("HH:mm", Locale.getDefault())
-    private val dateFmt = SimpleDateFormat("EEEE, d MMMM", Locale.forLanguageTag("ru"))
 
     private val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
     private val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
 
     private val navDefaults = listOf("ru.yandex.yandexnavi", "com.google.android.apps.maps")
-    private val obdPackage = "org.prowl.torque"
+
+    // Tabs
+    private val TAB_HOME = 0
+    private val TAB_MUSIC = 1
+    private val TAB_MAP = 2
+    private val TAB_AUTO = 3
+    private val TAB_SETTINGS = 4
+    private val TAB_APPS = 5
 
     // Header
     private lateinit var clock: TextView
-    private lateinit var dateText: TextView
+    private lateinit var btIcon: IconView
+    private lateinit var wifiIcon: IconView
 
     // Player
     private lateinit var artImage: ImageView
-    private lateinit var artPlaceholder: TextView
+    private lateinit var artPlaceholder: View
     private lateinit var trackTitle: TextView
     private lateinit var trackArtist: TextView
-    private lateinit var trackSource: TextView
-    private lateinit var playButton: TextView
-    private lateinit var trackBar: Bar
+    private lateinit var playIcon: IconView
+    private lateinit var seek: SeekLine
     private lateinit var positionText: TextView
     private lateinit var durationText: TextView
     private lateinit var accessButton: TextView
 
     // Pages
     private lateinit var dashboard: View
-    private lateinit var appsPage: View
     private lateinit var autoPage: View
+    private lateinit var appsPage: View
     private lateinit var settingsPage: ScrollView
     private lateinit var settingsBody: LinearLayout
     private lateinit var grid: GridLayout
     private lateinit var appsCount: TextView
     private val navItems = mutableListOf<LinearLayout>()
-    private val navIcons = mutableListOf<TextView>()
+    private val navIcons = mutableListOf<IconView>()
     private val navLabels = mutableListOf<TextView>()
     private val shortcutCells = mutableListOf<LinearLayout>()
-    private var currentTab = 0
+    private var currentTab = TAB_HOME
 
     private var controller: MediaController? = null
     private var isPlaying = false
-    private var lastArtKey: Any? = null
+    private var lastArt: Any? = null
 
     private val tick = object : Runnable {
         override fun run() {
-            val now = Date()
-            clock.text = timeFmt.format(now)
-            dateText.text = dateFmt.format(now).replaceFirstChar { it.uppercase() }
+            clock.text = timeFmt.format(Date())
+            refreshStatusIcons()
             refreshMedia()
             handler.postDelayed(this, 1000)
         }
@@ -121,6 +129,12 @@ class MainActivity : Activity() {
     private fun box(fill: String, radius: Int, strokeHex: String? = null): GradientDrawable =
         GradientDrawable().apply {
             setColor(rgb(fill))
+            cornerRadius = radius.dp().toFloat()
+            if (strokeHex != null) setStroke(1.dp(), rgb(strokeHex))
+        }
+
+    private fun grad(top: String, bottom: String, radius: Int, strokeHex: String?): GradientDrawable =
+        GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(rgb(top), rgb(bottom))).apply {
             cornerRadius = radius.dp().toFloat()
             if (strokeHex != null) setStroke(1.dp(), rgb(strokeHex))
         }
@@ -139,17 +153,22 @@ class MainActivity : Activity() {
         ellipsize = TextUtils.TruncateAt.END
     }
 
+    private fun icon(i: Ico, hex: String, stroke: Float = 1.7f) = IconView(this, i, rgb(hex), stroke)
+
     /** Visual press feedback for custom buttons. */
-    private fun View.pressable(): View = apply {
+    private fun <T : View> T.pressable(): T = apply {
         isClickable = true
         setOnTouchListener { v, e ->
             when (e.actionMasked) {
-                android.view.MotionEvent.ACTION_DOWN -> v.alpha = 0.6f
-                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> v.alpha = 1f
+                MotionEvent.ACTION_DOWN -> v.alpha = 0.6f
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> v.alpha = 1f
             }
             false
         }
     }
+
+    private fun spacer() = View(this)
+    private fun hLine(hex: String = edge) = View(this).apply { setBackgroundColor(rgb(hex)) }
 
     private fun fmt(ms: Long): String {
         val total = (ms / 1000).coerceAtLeast(0)
@@ -179,274 +198,246 @@ class MainActivity : Activity() {
         return runCatching { startActivity(intent) }.isSuccess
     }
 
-    private fun launchPackage(pkg: String): Boolean {
-        val intent = packageManager.getLaunchIntentForPackage(pkg) ?: return false
-        return runCatching { startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }.isSuccess
-    }
-
-    private fun isInstalled(pkg: String) = packageManager.getLaunchIntentForPackage(pkg) != null
-
-    /** Thin progress bar. [set] takes a fraction from 0 to 1. */
-    private inner class Bar(heightDp: Int, color: String) {
-        private val fill = View(this@MainActivity).apply { background = box(color, 2) }
-        private val rest = View(this@MainActivity)
-        val view = LinearLayout(this@MainActivity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            background = box("#2A2119", 2)
-            addView(fill, LinearLayout.LayoutParams(0, heightDp.dp(), 0f))
-            addView(rest, LinearLayout.LayoutParams(0, heightDp.dp(), 1f))
-        }
-
-        fun set(fraction: Float) {
-            val f = fraction.coerceIn(0f, 1f)
-            (fill.layoutParams as LinearLayout.LayoutParams).weight = f
-            (rest.layoutParams as LinearLayout.LayoutParams).weight = 1f - f
-            view.requestLayout()
-        }
-    }
-
     // ---------- top bar & navigation ----------
 
     private fun topBar(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
-        setPadding(18.dp(), 0, 18.dp(), 0)
-        addView(label("E90 OS", 19f, amber, true))
-        addView(label("BMW E90", 13f, muted).apply {
-            letterSpacing = 0.3f
-            setPadding(12.dp(), 3.dp(), 0, 0)
-        })
-        addView(View(this@MainActivity), LinearLayout.LayoutParams(0, 1, 1f))
-        dateText = label("", 14f, muted).apply { setPadding(0, 0, 16.dp(), 0) }
-        addView(dateText)
-        clock = label("", 22f, text, true)
+        setPadding(22.dp(), 0, 22.dp(), 0)
+        addView(label("E90 OS", 24f, amber, true))
+        addView(label("  —  COCKPIT", 22f, soft).apply { letterSpacing = 0.04f })
+        addView(spacer(), LinearLayout.LayoutParams(0, 1, 1f))
+        btIcon = icon(Ico.BT, amber, 1.9f)
+        addView(btIcon, LinearLayout.LayoutParams(24.dp(), 24.dp()).apply { rightMargin = 18.dp() })
+        wifiIcon = icon(Ico.WIFI, text, 1.9f)
+        addView(wifiIcon, LinearLayout.LayoutParams(26.dp(), 24.dp()).apply { rightMargin = 18.dp() })
+        addView(hLine(edgeHi), LinearLayout.LayoutParams(1.dp(), 24.dp()).apply { rightMargin = 18.dp() })
+        clock = label("", 26f, amber, true)
         addView(clock)
+    }
+
+    private fun refreshStatusIcons() {
+        val bt = runCatching { BluetoothAdapter.getDefaultAdapter()?.isEnabled == true }.getOrDefault(false)
+        val wifi = runCatching { applicationContext.getSystemService(WifiManager::class.java)?.isWifiEnabled == true }
+            .getOrDefault(false)
+        btIcon.color = rgb(if (bt) amber else "#4A4038")
+        wifiIcon.color = rgb(if (wifi) text else "#4A4038")
     }
 
     private fun sideNav(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        setBackgroundColor(rgb("#0F0C0A"))
-        setPadding(8.dp(), 8.dp(), 8.dp(), 8.dp())
-        val items = listOf("⌂" to "Главная", "♫" to "Музыка", "➤" to "Карта", "◉" to "Авто", "▦" to "Приложения", "⚙" to "Настройки")
-        items.forEachIndexed { index, (icon, title) ->
+        setPadding(8.dp(), 10.dp(), 0, 10.dp())
+        val items = listOf(Ico.HOME to "Главная", Ico.MUSIC to "Музыка", Ico.PIN to "Карта", Ico.CAR to "Авто", Ico.GEAR to "Настройки")
+        items.forEachIndexed { index, (ic, title) ->
+            if (index > 0) addView(hLine("#221A14"), LinearLayout.LayoutParams(MATCH, 1.dp()).apply {
+                leftMargin = 14.dp(); rightMargin = 14.dp()
+            })
             val item = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
-                val ic = label(icon, 22f, muted).apply { gravity = Gravity.CENTER }
-                val tv = label(title, 12f, muted).apply {
-                    gravity = Gravity.CENTER
-                    setPadding(0, 4.dp(), 0, 0)
-                }
-                navIcons.add(ic)
+                val iv = icon(ic, text, 1.8f)
+                val tv = label(title, 14f, text).apply { gravity = Gravity.CENTER; setPadding(0, 4.dp(), 0, 0) }
+                navIcons.add(iv)
                 navLabels.add(tv)
-                addView(ic)
+                addView(iv, LinearLayout.LayoutParams(30.dp(), 30.dp()))
                 addView(tv)
                 setOnClickListener { onTab(index) }
-                if (index == 1 || index == 2) setOnLongClickListener { chooseApp(index); true }
+                if (index == TAB_MUSIC || index == TAB_MAP) setOnLongClickListener { chooseApp(index); true }
                 pressable()
             }
             navItems.add(item)
-            addView(item, LinearLayout.LayoutParams(MATCH, 0, 1f).apply {
-                if (index > 0) topMargin = 4.dp()
-            })
+            addView(item, LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = 2.dp(); bottomMargin = 2.dp() })
         }
     }
 
     private fun onTab(index: Int) {
         when (index) {
-            0 -> select(0)
-            1, 2 -> openSelectedApp(index)
-            3 -> select(3)
-            4 -> {
-                select(4)
-                loadApps()
-            }
-            5 -> {
-                buildSettingsBody()
-                select(5)
-            }
+            TAB_MUSIC, TAB_MAP -> openSelectedApp(index)
+            TAB_APPS -> { select(TAB_APPS); loadApps() }
+            TAB_SETTINGS -> { buildSettingsBody(); select(TAB_SETTINGS) }
+            else -> select(index)
         }
     }
 
     private fun select(index: Int) {
         currentTab = index
-        dashboard.visibility = if (index == 0) View.VISIBLE else View.GONE
-        autoPage.visibility = if (index == 3) View.VISIBLE else View.GONE
-        appsPage.visibility = if (index == 4) View.VISIBLE else View.GONE
-        settingsPage.visibility = if (index == 5) View.VISIBLE else View.GONE
-        if (index == 3) startGps() else stopGps()
+        dashboard.visibility = if (index == TAB_HOME) View.VISIBLE else View.GONE
+        autoPage.visibility = if (index == TAB_AUTO) View.VISIBLE else View.GONE
+        appsPage.visibility = if (index == TAB_APPS) View.VISIBLE else View.GONE
+        settingsPage.visibility = if (index == TAB_SETTINGS) View.VISIBLE else View.GONE
+        if (index == TAB_AUTO) startGps() else stopGps()
+        val activeNav = if (index == TAB_APPS) TAB_SETTINGS else index
         navItems.forEachIndexed { i, item ->
-            val active = i == index
-            item.background = if (active) box("#2A1D10", 10, edgeHi) else null
-            navIcons[i].setTextColor(rgb(if (active) amber else muted))
-            navLabels[i].setTextColor(rgb(if (active) amber else muted))
+            val active = i == activeNav
+            item.background = if (active) grad("#5A3511", "#2A190B", 12, amber) else null
+            navIcons[i].color = rgb(if (active) amber else text)
+            navLabels[i].setTextColor(rgb(if (active) amber else text))
+            navLabels[i].typeface = if (active) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
         }
     }
 
     // ---------- dashboard ----------
 
-    private fun card(): LinearLayout = LinearLayout(this).apply {
+    private fun card(radius: Int = 12): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        background = box(panel, 12, edge)
+        background = grad("#1A1410", "#100C0A", radius, edge)
     }
 
-    private fun controlButton(glyph: String, size: Int, primary: Boolean, onClick: () -> Unit): TextView =
-        label(glyph, if (primary) 24f else 20f, if (primary) "#FFF4E7" else amber, primary).apply {
-            gravity = Gravity.CENTER
-            background = if (primary) box(amberDeep, size / 2, amber) else box(panelHi, size / 2, edge)
+    private fun transportButton(ic: Ico, primary: Boolean, onClick: () -> Unit): Pair<FrameLayout, IconView> {
+        val iv = icon(ic, if (primary) amber else text)
+        val frame = FrameLayout(this).apply {
+            background = if (primary) grad("#6A3E12", "#3A220C", 10, amber) else grad("#1E1813", "#15110E", 10, edge)
+            addView(iv, FrameLayout.LayoutParams(26.dp(), 26.dp(), Gravity.CENTER))
             setOnClickListener { onClick() }
             pressable()
         }
+        return frame to iv
+    }
 
     private fun buildPlayer(): View = card().apply {
-        setPadding(16.dp(), 14.dp(), 16.dp(), 12.dp())
+        gravity = Gravity.CENTER_HORIZONTAL
+        setPadding(18.dp(), 14.dp(), 18.dp(), 14.dp())
 
-        addView(label("СЕЙЧАС ИГРАЕТ", 11f, dim, true).apply { letterSpacing = 0.15f })
-
-        val top = LinearLayout(this@MainActivity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
         val art = FrameLayout(this@MainActivity).apply {
-            background = box("#241A13", 10, edge)
-            artPlaceholder = label("♫", 44f, amber).apply { gravity = Gravity.CENTER }
-            addView(artPlaceholder, FrameLayout.LayoutParams(MATCH, MATCH))
+            background = grad("#2A1D14", "#140F0C", 12, edge)
+            artPlaceholder = icon(Ico.MUSIC, "#6A4A2A", 1.4f)
+            addView(artPlaceholder, FrameLayout.LayoutParams(84.dp(), 84.dp(), Gravity.CENTER))
             artImage = ImageView(this@MainActivity).apply {
                 scaleType = ImageView.ScaleType.CENTER_CROP
                 visibility = View.GONE
+                background = box("#140F0C", 12)
                 clipToOutline = true
-                background = box("#241A13", 10)
             }
             addView(artImage, FrameLayout.LayoutParams(MATCH, MATCH))
-            setOnClickListener { openSelectedApp(1) }
+            setOnClickListener { openSelectedApp(TAB_MUSIC) }
         }
-        top.addView(art, LinearLayout.LayoutParams(124.dp(), 124.dp()))
-        val meta = LinearLayout(this@MainActivity).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(16.dp(), 0, 0, 0)
-            trackTitle = label("Нет активного трека", 21f, text, true).apply {
-                maxLines = 2
-                ellipsize = TextUtils.TruncateAt.END
-            }
-            addView(trackTitle)
-            trackArtist = label("", 15f, muted).oneLine()
-            addView(trackArtist, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = 6.dp() })
-            trackSource = label("", 12f, amber).oneLine()
-            addView(trackSource, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = 8.dp() })
-            accessButton = label("Разрешить доступ к музыке  ›", 13f, amber, true).apply {
-                visibility = View.GONE
-                setPadding(12.dp(), 7.dp(), 12.dp(), 7.dp())
-                background = box("#2A1D10", 8, edgeHi)
-                setOnClickListener { openNotificationAccess() }
-                pressable()
-            }
-            addView(accessButton, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = 10.dp() })
-        }
-        top.addView(meta, LinearLayout.LayoutParams(0, WRAP, 1f))
-        addView(top, LinearLayout.LayoutParams(MATCH, 0, 1f))
+        addView(art, LinearLayout.LayoutParams(186.dp(), 186.dp()))
 
-        trackBar = Bar(4, amber)
-        addView(trackBar.view, LinearLayout.LayoutParams(MATCH, 4.dp()))
-        addView(LinearLayout(this@MainActivity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 4.dp(), 0, 0)
-            positionText = label("0:00", 11f, muted)
-            durationText = label("0:00", 11f, muted)
-            addView(positionText)
-            addView(View(this@MainActivity), LinearLayout.LayoutParams(0, 1, 1f))
-            addView(durationText)
-        })
-        addView(LinearLayout(this@MainActivity).apply {
+        trackTitle = label("Нет активного трека", 24f, text, true).apply { gravity = Gravity.CENTER }.oneLine()
+        addView(trackTitle, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = 12.dp() })
+        trackArtist = label("", 17f, muted).apply { gravity = Gravity.CENTER }.oneLine()
+        addView(trackArtist, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = 5.dp() })
+        accessButton = label("Разрешить доступ к музыке  ›", 13f, amber, true).apply {
             gravity = Gravity.CENTER
-            orientation = LinearLayout.HORIZONTAL
-            addView(controlButton("⏮", 50, false) { mediaAction(KeyEvent.KEYCODE_MEDIA_PREVIOUS) },
-                LinearLayout.LayoutParams(50.dp(), 50.dp()))
-            playButton = controlButton("▶", 58, true) { togglePlay() }
-            addView(playButton, LinearLayout.LayoutParams(58.dp(), 58.dp()).apply {
-                leftMargin = 22.dp(); rightMargin = 22.dp()
-            })
-            addView(controlButton("⏭", 50, false) { mediaAction(KeyEvent.KEYCODE_MEDIA_NEXT) },
-                LinearLayout.LayoutParams(50.dp(), 50.dp()))
-        }, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = 2.dp() })
-    }
-
-    private fun dataCell(name: String, value: String, unit: String): View = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
-        gravity = Gravity.CENTER_VERTICAL
-        background = box(panelHi, 10, edge)
-        setPadding(12.dp(), 6.dp(), 8.dp(), 6.dp())
-        addView(label(name, 11f, muted).oneLine())
-        addView(LinearLayout(this@MainActivity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.BOTTOM
-            addView(label(value, 22f, dim, true))
-            addView(label(" $unit", 12f, dim).apply { setPadding(0, 0, 0, 3.dp()) })
-        }, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = 4.dp() })
-    }
-
-    private fun row(vararg views: View): LinearLayout = LinearLayout(this).apply {
-        orientation = LinearLayout.HORIZONTAL
-        views.forEachIndexed { i, v ->
-            addView(v, LinearLayout.LayoutParams(0, MATCH, 1f).apply { if (i > 0) leftMargin = 8.dp() })
+            visibility = View.GONE
+            setPadding(12.dp(), 6.dp(), 12.dp(), 6.dp())
+            background = box("#2A1D10", 8, edgeHi)
+            setOnClickListener { openNotificationAccess() }
+            pressable()
         }
-    }
+        addView(accessButton, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = 6.dp() })
 
-    private fun buildCarPanel(): View = card().apply {
-        setPadding(12.dp(), 10.dp(), 12.dp(), 10.dp())
-        setOnClickListener { onTab(3) }
+        addView(spacer(), LinearLayout.LayoutParams(1, 0, 1f))
+
         addView(LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            addView(label("БОРТОВОЙ КОМПЬЮТЕР", 13f, text, true).apply { letterSpacing = 0.08f })
-            addView(View(this@MainActivity), LinearLayout.LayoutParams(0, 1, 1f))
-            addView(label("●  CAN: нет связи", 11f, "#D9734A").apply {
-                setPadding(10.dp(), 4.dp(), 10.dp(), 4.dp())
-                background = box("#2B1610", 10, "#5A2A1A")
-            })
+            positionText = label("0:00", 14f, muted)
+            durationText = label("0:00", 14f, muted)
+            seek = SeekLine(this@MainActivity)
+            addView(positionText, LinearLayout.LayoutParams(44.dp(), WRAP))
+            addView(seek, LinearLayout.LayoutParams(0, 18.dp(), 1f).apply { leftMargin = 6.dp(); rightMargin = 6.dp() })
+            addView(durationText.apply { gravity = Gravity.END }, LinearLayout.LayoutParams(44.dp(), WRAP))
         }, LinearLayout.LayoutParams(MATCH, WRAP))
 
-        val obd = LinearLayout(this@MainActivity).apply {
+        addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            val (prev, _) = transportButton(Ico.PREV, false) { mediaAction(KeyEvent.KEYCODE_MEDIA_PREVIOUS) }
+            val (play, pi) = transportButton(Ico.PLAY, true) { togglePlay() }
+            val (next, _) = transportButton(Ico.NEXT, false) { mediaAction(KeyEvent.KEYCODE_MEDIA_NEXT) }
+            playIcon = pi
+            addView(prev, LinearLayout.LayoutParams(0, MATCH, 1f))
+            addView(play, LinearLayout.LayoutParams(0, MATCH, 1f).apply { leftMargin = 12.dp(); rightMargin = 12.dp() })
+            addView(next, LinearLayout.LayoutParams(0, MATCH, 1f))
+        }, LinearLayout.LayoutParams(MATCH, 52.dp()).apply { topMargin = 10.dp() })
+    }
+
+    /** Icon + title + big value card used by the on-board computer. */
+    private fun valueCard(ic: Ico, title: String, value: String, unit: String): LinearLayout = card().apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(16.dp(), 6.dp(), 12.dp(), 6.dp())
+        addView(icon(ic, amber, 1.6f), LinearLayout.LayoutParams(46.dp(), 46.dp()).apply { rightMargin = 16.dp() })
+        addView(LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            background = box("#2A1D10", 10, edgeHi)
-            addView(label("OBD", 18f, amber, true).apply { gravity = Gravity.CENTER })
-            addView(label(if (isInstalled(obdPackage)) "Открыть Torque ›" else "Torque не установлен", 11f, muted)
-                .apply { gravity = Gravity.CENTER; setPadding(0, 3.dp(), 0, 0) })
-            setOnClickListener { if (!launchPackage(obdPackage)) toast("Torque не установлен") }
-            pressable()
+            addView(label(title, 15f, soft).oneLine())
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.BOTTOM
+                addView(label(value, 30f, text, true))
+                addView(label(" $unit", 19f, text, true).apply { setPadding(0, 0, 0, 2.dp()) })
+            }, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = 4.dp() })
+        }, LinearLayout.LayoutParams(0, WRAP, 1f))
+    }
+
+    private fun pair(a: View, b: View): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        addView(a, LinearLayout.LayoutParams(0, MATCH, 1f))
+        addView(b, LinearLayout.LayoutParams(0, MATCH, 1f).apply { leftMargin = 10.dp() })
+    }
+
+    private fun buildCarPanel(): View = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+
+        addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(hLine(amber), LinearLayout.LayoutParams(2.dp(), 22.dp()).apply { rightMargin = 12.dp() })
+            addView(label("БОРТОВОЙ КОМПЬЮТЕР", 17f, text, true).apply { letterSpacing = 0.06f })
+            addView(spacer(), LinearLayout.LayoutParams(0, 1, 1f))
+            addView(hLine(amber), LinearLayout.LayoutParams(2.dp(), 22.dp()).apply { rightMargin = 14.dp() })
+            addView(icon(Ico.CLOUD, text, 1.6f), LinearLayout.LayoutParams(28.dp(), 28.dp()).apply { rightMargin = 10.dp() })
+            addView(label("— °C", 22f, text, true))
+            setPadding(2.dp(), 0, 8.dp(), 0)
+            setOnClickListener { select(TAB_AUTO) }
+        }, LinearLayout.LayoutParams(MATCH, 34.dp()))
+
+        addView(pair(valueCard(Ico.BATTERY, "Напряжение", "—", "В"), valueCard(Ico.COOLANT, "Температура ОЖ", "—", "°C")),
+            LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = 8.dp() })
+
+        val oil = card().apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(16.dp(), 6.dp(), 18.dp(), 6.dp())
+            addView(icon(Ico.OIL, amber, 1.6f), LinearLayout.LayoutParams(46.dp(), 46.dp()).apply { rightMargin = 16.dp() })
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(label("Уровень масла", 15f, soft))
+                addView(SegmentBar(this@MainActivity, 6), LinearLayout.LayoutParams(MATCH, 12.dp()).apply { topMargin = 8.dp() })
+            }, LinearLayout.LayoutParams(0, WRAP, 1f))
+            addView(hLine(edgeHi), LinearLayout.LayoutParams(1.dp(), 26.dp()).apply { leftMargin = 16.dp(); rightMargin = 16.dp() })
+            addView(label("—", 18f, amber, true))
         }
-        addView(row(dataCell("Напряжение АКБ", "—", "В"), dataCell("Температура ОЖ", "—", "°C"),
-            dataCell("Масло", "—", "")), LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = 8.dp() })
-        addView(row(dataCell("Запас хода", "—", "км"), dataCell("Расход", "—", "л/100"), obd),
+        addView(oil, LinearLayout.LayoutParams(MATCH, 0, 0.8f).apply { topMargin = 8.dp() })
+
+        addView(pair(valueCard(Ico.FUEL, "Запас хода", "—", "км"), valueCard(Ico.FUEL_DROP, "Расход", "—", "л/100 км")),
             LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = 8.dp() })
     }
 
     private fun buildQuickAccess(): View = card().apply {
-        setPadding(12.dp(), 8.dp(), 8.dp(), 8.dp())
+        setPadding(14.dp(), 6.dp(), 12.dp(), 8.dp())
         addView(LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            addView(label("БЫСТРЫЙ ДОСТУП", 11f, dim, true).apply { letterSpacing = 0.15f })
-            addView(View(this@MainActivity), LinearLayout.LayoutParams(0, 1, 1f))
-            addView(label("✎  Изменить", 12f, amber).apply {
-                setPadding(10.dp(), 3.dp(), 10.dp(), 3.dp())
+            addView(label("Быстрый доступ", 16f, text, true))
+            addView(hLine(edge), LinearLayout.LayoutParams(0, 1.dp(), 1f).apply { leftMargin = 14.dp(); rightMargin = 14.dp() })
+            addView(icon(Ico.PENCIL, amber, 1.8f).apply {
                 setOnClickListener { editQuickAccess() }
                 pressable()
-            })
-        })
+            }, LinearLayout.LayoutParams(24.dp(), 24.dp()))
+        }, LinearLayout.LayoutParams(MATCH, 26.dp()))
         val strip = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
         repeat(4) { index ->
             val cell = LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(10.dp(), 0, 6.dp(), 0)
-                background = box(panelHi, 10, edge)
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                background = grad("#211A14", "#17120F", 10, edge)
                 setOnClickListener { openQuickApp(index) }
                 setOnLongClickListener { chooseQuickApp(index); true }
                 pressable()
             }
             shortcutCells.add(cell)
-            strip.addView(cell, LinearLayout.LayoutParams(0, MATCH, 1f).apply { if (index > 0) leftMargin = 8.dp() })
+            strip.addView(cell, LinearLayout.LayoutParams(0, MATCH, 1f).apply { if (index > 0) leftMargin = 12.dp() })
         }
         addView(strip, LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = 6.dp() })
     }
@@ -454,15 +445,15 @@ class MainActivity : Activity() {
     private fun buildCockpitDashboard(): View {
         val right = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            addView(buildCarPanel(), LinearLayout.LayoutParams(MATCH, 0, 1.75f))
-            addView(buildQuickAccess(), LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = 10.dp() })
+            addView(buildCarPanel(), LinearLayout.LayoutParams(MATCH, 0, 1f))
+            addView(buildQuickAccess(), LinearLayout.LayoutParams(MATCH, 104.dp()).apply { topMargin = 10.dp() })
         }
         refreshQuickAccess()
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(10.dp(), 10.dp(), 10.dp(), 10.dp())
-            addView(buildPlayer(), LinearLayout.LayoutParams(0, MATCH, 1f).apply { rightMargin = 10.dp() })
-            addView(right, LinearLayout.LayoutParams(0, MATCH, 1.3f))
+            setPadding(14.dp(), 12.dp(), 14.dp(), 12.dp())
+            addView(buildPlayer(), LinearLayout.LayoutParams(0, MATCH, 0.78f).apply { rightMargin = 16.dp() })
+            addView(right, LinearLayout.LayoutParams(0, MATCH, 1.22f))
         }
     }
 
@@ -475,15 +466,16 @@ class MainActivity : Activity() {
         shortcutCells.forEachIndexed { index, cell ->
             cell.removeAllViews()
             val component = quickComponent(index)
-            val icon = component?.let { runCatching { packageManager.getActivityIcon(it) }.getOrNull() }
-            if (icon != null) {
-                cell.addView(ImageView(this).apply { setImageDrawable(icon) },
-                    LinearLayout.LayoutParams(34.dp(), 34.dp()).apply { rightMargin = 8.dp() })
+            val appIcon = component?.let { runCatching { packageManager.getActivityIcon(it) }.getOrNull() }
+            if (appIcon != null) {
+                cell.addView(ImageView(this).apply { setImageDrawable(appIcon) }, LinearLayout.LayoutParams(32.dp(), 32.dp()))
             } else {
-                cell.addView(label("+", 22f, amber, true), LinearLayout.LayoutParams(WRAP, WRAP).apply { rightMargin = 8.dp() })
+                cell.addView(icon(Ico.PLUS, amber, 1.7f), LinearLayout.LayoutParams(30.dp(), 30.dp()))
             }
-            cell.addView(label(appLabel(component) ?: "Добавить", 13f, if (component == null) amber else text).oneLine(),
-                LinearLayout.LayoutParams(0, WRAP, 1f))
+            cell.addView(label(appLabel(component) ?: "Добавить", 14f, text).apply {
+                gravity = Gravity.CENTER
+                setPadding(4.dp(), 4.dp(), 4.dp(), 0)
+            }.oneLine(), LinearLayout.LayoutParams(MATCH, WRAP))
         }
     }
 
@@ -528,8 +520,8 @@ class MainActivity : Activity() {
 
     // ---------- music / navigation apps ----------
 
-    private fun appKey(index: Int) = if (index == 1) "music_app" else "navigation_app"
-    private fun appTitle(index: Int) = if (index == 1) "Музыка" else "Навигация"
+    private fun appKey(index: Int) = if (index == TAB_MUSIC) "music_app" else "navigation_app"
+    private fun appTitle(index: Int) = if (index == TAB_MUSIC) "Музыка" else "Навигация"
 
     private fun savedApp(index: Int): ComponentName? =
         getPreferences(MODE_PRIVATE).getString(appKey(index), null)?.let(ComponentName::unflattenFromString)
@@ -537,10 +529,8 @@ class MainActivity : Activity() {
     /** Saved app, or for navigation the first installed known navigator. */
     private fun effectiveApp(index: Int): ComponentName? {
         savedApp(index)?.let { return it }
-        if (index == 2) {
-            for (pkg in navDefaults) {
-                packageManager.getLaunchIntentForPackage(pkg)?.component?.let { return it }
-            }
+        if (index == TAB_MAP) {
+            for (pkg in navDefaults) packageManager.getLaunchIntentForPackage(pkg)?.component?.let { return it }
         }
         return null
     }
@@ -557,7 +547,7 @@ class MainActivity : Activity() {
     private fun chooseApp(index: Int) = pickApp("Приложение: ${appTitle(index)}", false) { component ->
         if (component == null) return@pickApp
         getPreferences(MODE_PRIVATE).edit().putString(appKey(index), component.flattenToString()).apply()
-        if (currentTab == 5) buildSettingsBody()
+        if (currentTab == TAB_SETTINGS) buildSettingsBody()
         launch(component)
     }
 
@@ -573,21 +563,22 @@ class MainActivity : Activity() {
     }
 
     private fun settingsSection(title: String) {
-        settingsBody.addView(label(title.uppercase(), 11f, dim, true).apply {
+        settingsBody.addView(label(title.uppercase(), 12f, dim, true).apply {
             letterSpacing = 0.15f
             setPadding(4.dp(), 14.dp(), 0, 6.dp())
         })
     }
 
-    private fun settingsRow(title: String, value: String, valueColor: String = muted, onClick: () -> Unit) {
+    private fun settingsRow(ic: Ico, title: String, value: String, valueColor: String = muted, onClick: () -> Unit) {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = box(panel, 10, edge)
-            setPadding(16.dp(), 12.dp(), 16.dp(), 12.dp())
-            addView(label(title, 16f, text), LinearLayout.LayoutParams(0, WRAP, 1f))
-            addView(label(value, 14f, valueColor).oneLine())
-            addView(label("  ›", 18f, amber))
+            background = grad("#1A1410", "#100C0A", 10, edge)
+            setPadding(14.dp(), 10.dp(), 16.dp(), 10.dp())
+            addView(icon(ic, amber, 1.7f), LinearLayout.LayoutParams(24.dp(), 24.dp()).apply { rightMargin = 14.dp() })
+            addView(label(title, 17f, text), LinearLayout.LayoutParams(0, WRAP, 1f))
+            addView(label(value, 15f, valueColor).oneLine())
+            addView(label("  ›", 20f, amber))
             setOnClickListener { onClick() }
             pressable()
         }
@@ -596,33 +587,32 @@ class MainActivity : Activity() {
 
     private fun buildSettingsBody() {
         settingsBody.removeAllViews()
-        settingsBody.addView(label("Настройки", 22f, text, true))
+        settingsBody.addView(label("Настройки", 24f, text, true))
 
         settingsSection("Приложения по умолчанию")
-        settingsRow("Музыка", appLabel(savedApp(1)) ?: "Не выбрано") { chooseApp(1) }
-        val nav = savedApp(2)
-        settingsRow("Навигация", appLabel(nav) ?: appLabel(effectiveApp(2))?.let { "$it (авто)" } ?: "Не выбрано") {
-            chooseApp(2)
+        settingsRow(Ico.MUSIC, "Музыка", appLabel(savedApp(TAB_MUSIC)) ?: "Не выбрано") { chooseApp(TAB_MUSIC) }
+        settingsRow(Ico.PIN, "Навигация",
+            appLabel(savedApp(TAB_MAP)) ?: appLabel(effectiveApp(TAB_MAP))?.let { "$it (авто)" } ?: "Не выбрано") {
+            chooseApp(TAB_MAP)
         }
 
         settingsSection("Главный экран")
+        settingsRow(Ico.GRID, "Все приложения", "${launchableApps().size}") { onTab(TAB_APPS) }
         val filled = (0 until 4).count { quickComponent(it) != null }
-        settingsRow("Быстрый доступ", "$filled из 4") { editQuickAccess() }
+        settingsRow(Ico.PENCIL, "Быстрый доступ", "$filled из 4") { editQuickAccess() }
         val access = hasNotificationAccess()
-        settingsRow("Доступ к музыке", if (access) "Разрешён" else "Не разрешён",
+        settingsRow(Ico.MUSIC, "Доступ к музыке", if (access) "Разрешён" else "Не разрешён",
             if (access) "#8FBF6A" else "#D9734A") { openNotificationAccess() }
 
         settingsSection("Система")
-        settingsRow("Лаунчер по умолчанию", "") {
+        settingsRow(Ico.HOME, "Лаунчер по умолчанию", "") {
             runCatching { startActivity(Intent(Settings.ACTION_HOME_SETTINGS)) }
                 .onFailure { runCatching { startActivity(Intent(Settings.ACTION_SETTINGS)) } }
         }
-        settingsRow("Настройки Android", "") { runCatching { startActivity(Intent(Settings.ACTION_SETTINGS)) } }
+        settingsRow(Ico.GEAR, "Настройки Android", "") { runCatching { startActivity(Intent(Settings.ACTION_SETTINGS)) } }
 
         val version = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: ""
-        settingsBody.addView(label("E90 OS COCKPIT  $version", 11f, dim).apply {
-            setPadding(4.dp(), 12.dp(), 0, 0)
-        })
+        settingsBody.addView(label("E90 OS COCKPIT  $version", 12f, dim).apply { setPadding(4.dp(), 12.dp(), 0, 0) })
     }
 
     // ---------- media ----------
@@ -670,7 +660,7 @@ class MainActivity : Activity() {
         handler.postDelayed({
             refreshMedia()
             if (controller == null) {
-                if (effectiveApp(1) != null) openSelectedApp(1) else toast("Выберите приложение для музыки")
+                if (effectiveApp(TAB_MUSIC) != null) openSelectedApp(TAB_MUSIC) else toast("Выберите приложение для музыки")
             }
         }, 1500)
     }
@@ -700,14 +690,12 @@ class MainActivity : Activity() {
         }.getOrDefault(c.packageName)
         trackTitle.text = md?.getString(MediaMetadata.METADATA_KEY_TITLE) ?: source
         trackArtist.text = md?.getString(MediaMetadata.METADATA_KEY_ARTIST)
-            ?: md?.getString(MediaMetadata.METADATA_KEY_ALBUM) ?: ""
-        trackSource.text = (if (isPlaying) "▶  " else "❚❚  ") + source
-        playButton.text = if (isPlaying) "❚❚" else "▶"
+            ?: md?.getString(MediaMetadata.METADATA_KEY_ALBUM) ?: source
+        playIcon.icon = if (isPlaying) Ico.PAUSE else Ico.PLAY
 
-        val art = md?.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
-            ?: md?.getBitmap(MediaMetadata.METADATA_KEY_ART)
-        if (art !== lastArtKey) {
-            lastArtKey = art
+        val art = md?.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART) ?: md?.getBitmap(MediaMetadata.METADATA_KEY_ART)
+        if (art !== lastArt) {
+            lastArt = art
             artImage.setImageBitmap(art)
             artImage.visibility = if (art != null) View.VISIBLE else View.GONE
             artPlaceholder.visibility = if (art != null) View.GONE else View.VISIBLE
@@ -719,7 +707,8 @@ class MainActivity : Activity() {
             position += ((SystemClock.elapsedRealtime() - st.lastPositionUpdateTime) * st.playbackSpeed).toLong()
         }
         if (duration > 0) position = position.coerceAtMost(duration)
-        trackBar.set(if (duration > 0) position.toFloat() / duration else 0f)
+        seek.active = duration > 0
+        seek.fraction = if (duration > 0) position.toFloat() / duration else 0f
         positionText.text = fmt(position)
         durationText.text = if (duration > 0) fmt(duration) else "--:--"
     }
@@ -727,15 +716,15 @@ class MainActivity : Activity() {
     private fun showNoTrack() {
         controller = null
         isPlaying = false
-        lastArtKey = null
+        lastArt = null
         trackTitle.text = "Нет активного трека"
-        trackArtist.text = "Нажмите ▶, чтобы продолжить"
-        trackSource.text = appLabel(effectiveApp(1))?.let { "Плеер: $it" } ?: ""
-        playButton.text = "▶"
+        trackArtist.text = appLabel(effectiveApp(TAB_MUSIC))?.let { "Нажмите ▶ · $it" } ?: "Нажмите ▶, чтобы продолжить"
+        playIcon.icon = Ico.PLAY
         artImage.setImageBitmap(null)
         artImage.visibility = View.GONE
         artPlaceholder.visibility = View.VISIBLE
-        trackBar.set(0f)
+        seek.active = false
+        seek.fraction = 0f
         positionText.text = "0:00"
         durationText.text = "0:00"
     }
@@ -744,48 +733,41 @@ class MainActivity : Activity() {
 
     private lateinit var speedGauge: GaugeView
     private lateinit var rpmGauge: GaugeView
-    private lateinit var speedSource: TextView
     private var locationListener: LocationListener? = null
 
-    private fun iconBadge(glyph: String): TextView = label(glyph, if (glyph.length > 1) 12f else 18f, amber, glyph.length > 1).apply {
-        gravity = Gravity.CENTER
-        background = box("#2A1D10", 8, edge)
-    }
-
-    /** "Name / value unit" block with an icon on the left. */
-    private fun metric(glyph: String, name: String, value: String, unit: String, big: Boolean = false): LinearLayout =
+    /** Icon + "name / value unit" block. */
+    private fun metric(ic: Ico, name: String, value: String, unit: String, big: Boolean = false): LinearLayout =
         LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            addView(iconBadge(glyph), LinearLayout.LayoutParams(34.dp(), 34.dp()).apply { rightMargin = 10.dp() })
+            addView(icon(ic, amber, 1.6f), LinearLayout.LayoutParams(34.dp(), 34.dp()).apply { rightMargin = 12.dp() })
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL
-                addView(label(name, 11f, muted).oneLine())
+                addView(label(name, 13f, soft).oneLine())
                 addView(LinearLayout(this@MainActivity).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.BOTTOM
-                    addView(label(value, if (big) 26f else 20f, text, true))
-                    addView(label(" $unit", 12f, muted).apply { setPadding(0, 0, 0, 3.dp()) })
+                    addView(label(value, if (big) 26f else 21f, text, true))
+                    addView(label(" $unit", 14f, muted).apply { setPadding(0, 0, 0, 3.dp()) })
                 }, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = 2.dp() })
             }, LinearLayout.LayoutParams(0, WRAP, 1f))
         }
 
-    private fun levelMetric(glyph: String, name: String, value: String, unit: String): LinearLayout =
+    private fun levelMetric(ic: Ico, name: String, value: String, unit: String): LinearLayout =
         LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            addView(metric(glyph, name, value, unit))
-            addView(SegmentBar(this@MainActivity), LinearLayout.LayoutParams(MATCH, 6.dp()).apply {
-                topMargin = 6.dp(); leftMargin = 44.dp()
+            addView(metric(ic, name, value, unit))
+            addView(SegmentBar(this@MainActivity, 8), LinearLayout.LayoutParams(MATCH, 7.dp()).apply {
+                topMargin = 6.dp(); leftMargin = 46.dp()
             })
         }
 
     private fun bottomCard(vararg parts: View): LinearLayout = card().apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
-        setPadding(12.dp(), 8.dp(), 12.dp(), 8.dp())
+        setPadding(14.dp(), 8.dp(), 14.dp(), 8.dp())
         parts.forEachIndexed { i, v ->
-            if (i > 0) addView(View(this@MainActivity).apply { setBackgroundColor(rgb(edge)) },
-                LinearLayout.LayoutParams(1.dp(), MATCH).apply { leftMargin = 10.dp(); rightMargin = 10.dp() })
+            if (i > 0) addView(hLine(), LinearLayout.LayoutParams(1.dp(), MATCH).apply { leftMargin = 12.dp(); rightMargin = 12.dp() })
             addView(v, LinearLayout.LayoutParams(0, WRAP, 1f))
         }
     }
@@ -799,19 +781,16 @@ class MainActivity : Activity() {
         val centre = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(8.dp(), 0, 8.dp(), 0)
-            addView(metric("t°", "Наружная t°", "—", "°C", big = true))
-            addView(View(this@MainActivity).apply { setBackgroundColor(rgb(edge)) },
-                LinearLayout.LayoutParams(MATCH, 1.dp()).apply { topMargin = 12.dp(); bottomMargin = 12.dp() })
-            addView(metric("км", "Запас хода", "—", "км", big = true))
-            addView(View(this@MainActivity).apply { setBackgroundColor(rgb(edge)) },
-                LinearLayout.LayoutParams(MATCH, 1.dp()).apply { topMargin = 12.dp(); bottomMargin = 12.dp() })
-            addView(metric("Ø", "Расход", "—", "л/100 км", big = true))
-            speedSource = label("Скорость: GPS  ·  остальное: CAN не подключён", 10f, dim).apply {
+            setPadding(10.dp(), 0, 10.dp(), 0)
+            addView(metric(Ico.CLOUD, "Наружная t°", "—", "°C", big = true))
+            addView(hLine(), LinearLayout.LayoutParams(MATCH, 1.dp()).apply { topMargin = 12.dp(); bottomMargin = 12.dp() })
+            addView(metric(Ico.FUEL, "Запас хода", "—", "км", big = true))
+            addView(hLine(), LinearLayout.LayoutParams(MATCH, 1.dp()).apply { topMargin = 12.dp(); bottomMargin = 12.dp() })
+            addView(metric(Ico.FUEL_DROP, "Расход Ø", "—", "л/100 км", big = true))
+            addView(label("Скорость: GPS  ·  остальное: CAN не подключён", 11f, dim).apply {
                 gravity = Gravity.CENTER
                 setPadding(0, 12.dp(), 0, 0)
-            }
-            addView(speedSource, LinearLayout.LayoutParams(MATCH, WRAP))
+            }, LinearLayout.LayoutParams(MATCH, WRAP))
         }
 
         val gauges = LinearLayout(this).apply {
@@ -825,32 +804,32 @@ class MainActivity : Activity() {
         val route = card().apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(12.dp(), 8.dp(), 12.dp(), 8.dp())
-            addView(iconBadge("➤"), LinearLayout.LayoutParams(34.dp(), 34.dp()).apply { rightMargin = 10.dp() })
+            setPadding(14.dp(), 8.dp(), 14.dp(), 8.dp())
+            addView(icon(Ico.NAV, amber, 1.7f), LinearLayout.LayoutParams(32.dp(), 32.dp()).apply { rightMargin = 12.dp() })
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL
-                addView(label("Карта · Маршрут", 11f, muted))
-                addView(label("Нет активного маршрута", 15f, text, true).oneLine(),
+                addView(label("Карта · Маршрут", 13f, soft))
+                addView(label("Нет активного маршрута", 16f, text, true).oneLine(),
                     LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = 3.dp() })
-                addView(label((appLabel(effectiveApp(2)) ?: "Навигатор") + "  ›", 12f, amber),
+                addView(label((appLabel(effectiveApp(TAB_MAP)) ?: "Навигатор") + "  ›", 13f, amber),
                     LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = 3.dp() })
             }, LinearLayout.LayoutParams(0, WRAP, 1f))
-            setOnClickListener { openSelectedApp(2) }
+            setOnClickListener { openSelectedApp(TAB_MAP) }
             pressable()
         }
 
         val bottom = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            addView(bottomCard(levelMetric("OIL", "Уровень масла", "—", "%"), metric("⚡", "Напряжение АКБ", "—", "В")),
+            addView(bottomCard(levelMetric(Ico.OIL, "Уровень масла", "—", "%"), metric(Ico.BATTERY, "Напряжение АКБ", "—", "В")),
                 LinearLayout.LayoutParams(0, MATCH, 1.25f))
             addView(route, LinearLayout.LayoutParams(0, MATCH, 1f).apply { leftMargin = 10.dp(); rightMargin = 10.dp() })
-            addView(bottomCard(levelMetric("≋", "ОЖ", "—", "°C"), metric("t°", "Впуск", "—", "°C")),
+            addView(bottomCard(levelMetric(Ico.COOLANT, "ОЖ", "—", "°C"), metric(Ico.THERMO, "Впуск", "—", "°C")),
                 LinearLayout.LayoutParams(0, MATCH, 1.25f))
         }
 
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(10.dp(), 6.dp(), 10.dp(), 10.dp())
+            setPadding(12.dp(), 6.dp(), 12.dp(), 12.dp())
             addView(gauges, LinearLayout.LayoutParams(MATCH, 0, 1f))
             addView(bottom, LinearLayout.LayoutParams(MATCH, 92.dp()).apply { topMargin = 6.dp() })
             visibility = View.GONE
@@ -900,7 +879,7 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 7 && currentTab == 3) startGps()
+        if (requestCode == 7 && currentTab == TAB_AUTO) startGps()
     }
 
     // ---------- apps page ----------
@@ -921,8 +900,7 @@ class MainActivity : Activity() {
                 setOnLongClickListener { addToQuick(component, name); true }
                 pressable()
             }
-            cell.addView(ImageView(this).apply { setImageDrawable(ri.loadIcon(pm)) },
-                LinearLayout.LayoutParams(56.dp(), 56.dp()))
+            cell.addView(ImageView(this).apply { setImageDrawable(ri.loadIcon(pm)) }, LinearLayout.LayoutParams(56.dp(), 56.dp()))
             cell.addView(label(name, 13f, text).apply {
                 gravity = Gravity.CENTER
                 setPadding(0, 6.dp(), 0, 0)
@@ -947,14 +925,14 @@ class MainActivity : Activity() {
 
     private fun buildAppsPage(): View {
         grid = GridLayout(this).apply { columnCount = 6 }
-        appsCount = label("", 13f, dim)
+        appsCount = label("", 14f, dim)
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(8.dp(), 0, 8.dp(), 6.dp())
-            addView(label("Приложения", 22f, text, true))
+            addView(label("Приложения", 24f, text, true))
             addView(appsCount.apply { setPadding(10.dp(), 4.dp(), 0, 0) })
-            addView(View(this@MainActivity), LinearLayout.LayoutParams(0, 1, 1f))
+            addView(spacer(), LinearLayout.LayoutParams(0, 1, 1f))
             addView(label("Удерживайте значок, чтобы добавить в быстрый доступ", 12f, dim))
         }
         return LinearLayout(this).apply {
@@ -995,31 +973,32 @@ class MainActivity : Activity() {
 
         val center = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            addView(sideNav(), LinearLayout.LayoutParams(112.dp(), MATCH))
-            addView(View(this@MainActivity).apply { setBackgroundColor(rgb(edge)) },
-                LinearLayout.LayoutParams(1.dp(), MATCH))
+            addView(sideNav(), LinearLayout.LayoutParams(124.dp(), MATCH))
+            addView(hLine("#2A1F16"), LinearLayout.LayoutParams(1.dp(), MATCH).apply { leftMargin = 8.dp() })
             addView(content, LinearLayout.LayoutParams(0, MATCH, 1f))
         }
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(rgb(bg))
-            addView(topBar(), LinearLayout.LayoutParams(MATCH, 44.dp()))
-            addView(View(this@MainActivity).apply { setBackgroundColor(rgb(edgeHi)) },
-                LinearLayout.LayoutParams(MATCH, 1.dp()))
+            addView(topBar(), LinearLayout.LayoutParams(MATCH, 48.dp()))
+            addView(View(this@MainActivity).apply {
+                background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
+                    intArrayOf(rgb("#2A1A0B"), rgb(amber), rgb("#2A1A0B")))
+            }, LinearLayout.LayoutParams(MATCH, 1.dp()))
             addView(center, LinearLayout.LayoutParams(MATCH, 0, 1f))
         }
 
         setContentView(root)
-        select(0)
+        select(TAB_HOME)
     }
 
     override fun onResume() {
         super.onResume()
         refreshQuickAccess()
-        if (currentTab == 5) buildSettingsBody()
+        if (currentTab == TAB_SETTINGS) buildSettingsBody()
         handler.removeCallbacks(tick)
         handler.post(tick)
-        if (currentTab == 3) startGps()
+        if (currentTab == TAB_AUTO) startGps()
     }
 
     override fun onPause() {
@@ -1030,7 +1009,7 @@ class MainActivity : Activity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        select(0)
+        select(TAB_HOME)
     }
 
     @Deprecated("Deprecated in Java")
