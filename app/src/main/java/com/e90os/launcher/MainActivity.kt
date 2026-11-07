@@ -123,6 +123,7 @@ class MainActivity : Activity() {
     }
 
     private var btTicks = 0
+    private var wasPlaying = false
     private var canSpeed: Int? = null
     private var gpsSpeed: Float? = null
     private var canAlive = false
@@ -966,8 +967,12 @@ class MainActivity : Activity() {
         }
         accessButton.visibility = View.GONE
 
-        val c = pickSession(sessions)
+        val c = pickSession(sessions.filter { it.packageName != GocBt.PKG })
         controller = c
+        // A phone/app track started playing while the Bluetooth view is open: show it.
+        val nowPlaying = c?.playbackState?.state == PlaybackState.STATE_PLAYING
+        if (nowPlaying && btMode && !wasPlaying) setBtMode(false)
+        wasPlaying = nowPlaying
         if (c == null) {
             showNoTrack()
             return
