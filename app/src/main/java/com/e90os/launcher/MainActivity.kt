@@ -122,6 +122,7 @@ class MainActivity : Activity() {
         bound[key]?.forEach { (tv, suffix) -> tv.text = (value ?: "—") + suffix }
     }
 
+    private var btTicks = 0
     private var canSpeed: Int? = null
     private var gpsSpeed: Float? = null
     private var canAlive = false
@@ -184,6 +185,10 @@ class MainActivity : Activity() {
             refreshStatusIcons()
             refreshMedia()
             if (currentTab == TAB_HOME || currentTab == TAB_AUTO) refreshCar()
+            if (btMode && currentTab == TAB_HOME) {
+                if (++btTicks % 5 == 0) gocBt.query()
+                refreshBt()
+            }
             handler.postDelayed(this, 1000)
         }
     }
@@ -377,7 +382,7 @@ class MainActivity : Activity() {
             addView(artImage, FrameLayout.LayoutParams(MATCH, MATCH))
             setOnClickListener { openSelectedApp(TAB_MUSIC) }
         }
-        addView(art, LinearLayout.LayoutParams(186.dp(), 186.dp()))
+        addView(art, LinearLayout.LayoutParams(160.dp(), 160.dp()).apply { topMargin = 40.dp() })
 
         trackTitle = label("Нет активного трека", 24f, text, true).apply { gravity = Gravity.CENTER }.oneLine()
         addView(trackTitle, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = 12.dp() })
@@ -523,28 +528,201 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             setPadding(14.dp(), 12.dp(), 14.dp(), 12.dp())
             addView(FrameLayout(this@MainActivity).apply {
-                addView(buildPlayer(), FrameLayout.LayoutParams(MATCH, MATCH))
-                addView(btButton(), FrameLayout.LayoutParams(WRAP, 36.dp(), Gravity.TOP or Gravity.END).apply {
-                    topMargin = 12.dp(); rightMargin = 12.dp()
+                mediaPanel = buildPlayer()
+                btPanel = buildBtPanel()
+                addView(mediaPanel, FrameLayout.LayoutParams(MATCH, MATCH))
+                addView(btPanel, FrameLayout.LayoutParams(MATCH, MATCH))
+                addView(sourceToggle(), FrameLayout.LayoutParams(WRAP, 32.dp(), Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+                    topMargin = 12.dp()
                 })
             }, LinearLayout.LayoutParams(0, MATCH, 0.78f).apply { rightMargin = 16.dp() })
             addView(right, LinearLayout.LayoutParams(0, MATCH, 1.22f))
         }
     }
 
-    /** Opens the head unit's own Bluetooth app (KSW) to pair a phone and play its music. */
-    private fun btButton(): View = LinearLayout(this).apply {
+    // ---------- media / Bluetooth source switch ----------
+
+    private lateinit var mediaPanel: View
+    private lateinit var btPanel: View
+    private lateinit var segMedia: TextView
+    private lateinit var segBt: TextView
+    private var btMode = false
+    private lateinit var gocBt: GocBt
+
+    private lateinit var btStatus: TextView
+    private lateinit var btDevice: TextView
+    private lateinit var btBadge: FrameLayout
+    private lateinit var btTitle: TextView
+    private lateinit var btArtist: TextView
+    private lateinit var btSeek: SeekLine
+    private lateinit var btPos: TextView
+    private lateinit var btDur: TextView
+    private lateinit var btPlayIcon: IconView
+    private lateinit var btConnectLabel: TextView
+
+    private fun segment(t: String, onClick: () -> Unit) = label(t, 13f, text, true).apply {
+        gravity = Gravity.CENTER
+        setPadding(14.dp(), 0, 14.dp(), 0)
+        setOnClickListener { onClick() }
+    }
+
+    /** Pill switch "Медиа | Bluetooth" in the corner of the music window. */
+    private fun sourceToggle(): View = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
-        gravity = Gravity.CENTER_VERTICAL
-        setPadding(10.dp(), 0, 12.dp(), 0)
-        background = grad("#2A1D12", "#1A120C", 18, edgeHi)
-        addView(icon(Ico.BT, amber, 1.9f), LinearLayout.LayoutParams(18.dp(), 18.dp()).apply { rightMargin = 6.dp() })
-        addView(label("Телефон", 13f, text, true))
-        setOnClickListener { openBluetooth() }
-        setOnLongClickListener {
-            runCatching { startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }; true
-        }
+        background = grad("#1E1610", "#130E0A", 16, edgeHi)
+        setPadding(3.dp(), 3.dp(), 3.dp(), 3.dp())
+        segMedia = segment("Медиа") { setBtMode(false) }
+        segBt = segment("ᛒ  Bluetooth") { setBtMode(true) }
+        addView(segMedia, LinearLayout.LayoutParams(WRAP, MATCH))
+        addView(segBt, LinearLayout.LayoutParams(WRAP, MATCH))
+    }
+
+    private fun setBtMode(on: Boolean) {
+        btMode = on
+        getPreferences(MODE_PRIVATE).edit().putBoolean("bt_mode", on).apply()
+        mediaPanel.visibility = if (on) View.GONE else View.VISIBLE
+        btPanel.visibility = if (on) View.VISIBLE else View.GONE
+        segMedia.background = if (!on) grad("#6A3E12", "#3A220C", 13, amber) else null
+        segBt.background = if (on) grad("#6A3E12", "#3A220C", 13, amber) else null
+        segMedia.setTextColor(rgb(if (!on) "#FFF4E7" else muted))
+        segBt.setTextColor(rgb(if (on) "#FFF4E7" else muted))
+        if (on) gocBt.query()
+        refreshBt()
+    }
+
+    private fun btAction(textValue: String, ic: Ico, onClick: () -> Unit): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER
+        background = grad("#1E1813", "#15110E", 10, edge)
+        addView(icon(ic, amber, 1.7f), LinearLayout.LayoutParams(18.dp(), 18.dp()).apply { rightMargin = 8.dp() })
+        addView(label(textValue, 13f, text, true).oneLine().also { if (ic == Ico.BT) btConnectLabel = it })
+        setOnClickListener { onClick() }
         pressable()
+    }
+
+    private fun buildBtPanel(): View = card().apply {
+        gravity = Gravity.CENTER_HORIZONTAL
+        setPadding(18.dp(), 14.dp(), 18.dp(), 14.dp())
+        visibility = View.GONE
+
+        // Phone status block.
+        addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            btBadge = FrameLayout(this@MainActivity).apply {
+                addView(icon(Ico.BT, amber, 1.6f), FrameLayout.LayoutParams(30.dp(), 30.dp(), Gravity.CENTER))
+            }
+            addView(btBadge, LinearLayout.LayoutParams(60.dp(), 60.dp()).apply { rightMargin = 14.dp() })
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                btStatus = label("", 12f, muted, true).apply { letterSpacing = 0.1f }
+                addView(btStatus)
+                btDevice = label("", 20f, text, true).oneLine()
+                addView(btDevice, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = 4.dp() })
+            }, LinearLayout.LayoutParams(0, WRAP, 1f))
+        }, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = 46.dp() })
+
+        // Phone music.
+        addView(FadeLine(this@MainActivity, rgb(edgeHi)), LinearLayout.LayoutParams(MATCH, 1.dp()).apply {
+            topMargin = 14.dp(); bottomMargin = 12.dp()
+        })
+        addView(label("МУЗЫКА С ТЕЛЕФОНА", 10f, dim, true).apply { letterSpacing = 0.15f })
+        btTitle = label("", 20f, text, true).apply { gravity = Gravity.CENTER }.oneLine()
+        addView(btTitle, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = 8.dp() })
+        btArtist = label("", 15f, muted).apply { gravity = Gravity.CENTER }.oneLine()
+        addView(btArtist, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = 4.dp() })
+
+        addView(spacer(), LinearLayout.LayoutParams(1, 0, 1f))
+        addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            btPos = label("0:00", 14f, muted)
+            btDur = label("0:00", 14f, muted).apply { gravity = Gravity.END }
+            btSeek = SeekLine(this@MainActivity)
+            addView(btPos, LinearLayout.LayoutParams(44.dp(), WRAP))
+            addView(btSeek, LinearLayout.LayoutParams(0, 18.dp(), 1f).apply { leftMargin = 6.dp(); rightMargin = 6.dp() })
+            addView(btDur, LinearLayout.LayoutParams(44.dp(), WRAP))
+        }, LinearLayout.LayoutParams(MATCH, WRAP))
+        addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            val (prev, _) = transportButton(Ico.PREV, false) { btMedia(KeyEvent.KEYCODE_MEDIA_PREVIOUS) }
+            val (play, pi) = transportButton(Ico.PLAY, true) { btMedia(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) }
+            val (next, _) = transportButton(Ico.NEXT, false) { btMedia(KeyEvent.KEYCODE_MEDIA_NEXT) }
+            btPlayIcon = pi
+            addView(prev, LinearLayout.LayoutParams(0, MATCH, 1f))
+            addView(play, LinearLayout.LayoutParams(0, MATCH, 1f).apply { leftMargin = 12.dp(); rightMargin = 12.dp() })
+            addView(next, LinearLayout.LayoutParams(0, MATCH, 1f))
+        }, LinearLayout.LayoutParams(MATCH, 48.dp()).apply { topMargin = 8.dp() })
+        addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(btAction("Подключить", Ico.BT) { openBluetooth() }, LinearLayout.LayoutParams(0, MATCH, 1f))
+            addView(btAction("Настройки BT", Ico.GEAR) {
+                runCatching { startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }.onFailure { openBluetooth() }
+            },
+                LinearLayout.LayoutParams(0, MATCH, 1f).apply { leftMargin = 10.dp() })
+        }, LinearLayout.LayoutParams(MATCH, 40.dp()).apply { topMargin = 10.dp() })
+    }
+
+    /** Media session of the head unit's Bluetooth app, when it publishes one. */
+    private fun btSession(): MediaController? =
+        mediaSessions()?.firstOrNull { it.packageName == GocBt.PKG }
+
+    private fun btMedia(code: Int) {
+        val c = btSession()
+        if (c != null) {
+            when (code) {
+                KeyEvent.KEYCODE_MEDIA_PREVIOUS -> c.transportControls.skipToPrevious()
+                KeyEvent.KEYCODE_MEDIA_NEXT -> c.transportControls.skipToNext()
+                else -> if (c.playbackState?.state == PlaybackState.STATE_PLAYING) c.transportControls.pause() else c.transportControls.play()
+            }
+        } else if (gocBt.connected == false) {
+            openBluetooth()
+            return
+        } else {
+            sendMediaKey(code)
+        }
+        handler.postDelayed({ refreshBt() }, 400)
+    }
+
+    private fun refreshBt() {
+        if (!::btStatus.isInitialized) return
+        val conn = gocBt.connected
+        val (status, color) = when (conn) {
+            true -> "ТЕЛЕФОН ПОДКЛЮЧЁН" to "#8FBF6A"
+            false -> "НЕТ ПОДКЛЮЧЕНИЯ" to "#D9734A"
+            null -> "BLUETOOTH" to muted
+        }
+        btStatus.text = status
+        btStatus.setTextColor(rgb(color))
+        btDevice.text = when (conn) {
+            true -> "Телефон"
+            false -> "Подключите телефон"
+            null -> "Bluetooth магнитолы"
+        }
+        btBadge.background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            colors = intArrayOf(rgb(if (conn == true) "#4A3010" else "#2A1D12"), rgb("#140F0B"))
+            gradientType = GradientDrawable.RADIAL_GRADIENT
+            gradientRadius = 32.dp().toFloat()
+            setStroke(2.dp(), rgb(if (conn == true) amber else edgeHi))
+        }
+        val c = btSession()
+        val md = c?.metadata
+        val st = c?.playbackState
+        val playing = st?.state == PlaybackState.STATE_PLAYING
+        btTitle.text = md?.getString(MediaMetadata.METADATA_KEY_TITLE)?.takeIf { it.isNotBlank() }
+            ?: if (conn == true) "Музыка телефона" else "Нет трека"
+        btArtist.text = md?.getString(MediaMetadata.METADATA_KEY_ARTIST)?.takeIf { it.isNotBlank() }
+            ?: if (conn == true) "Нажмите ▶ или включите музыку на телефоне" else "Нажмите «Подключить»"
+        btPlayIcon.icon = if (playing) Ico.PAUSE else Ico.PLAY
+        val dur = md?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L
+        var pos = st?.position ?: 0L
+        if (playing && st != null) pos += ((SystemClock.elapsedRealtime() - st.lastPositionUpdateTime) * st.playbackSpeed).toLong()
+        btSeek.active = dur > 0
+        btSeek.fraction = if (dur > 0) pos.toFloat() / dur else 0f
+        btPos.text = fmt(pos.coerceAtLeast(0))
+        btDur.text = if (dur > 0) fmt(dur) else "0:00"
+        btConnectLabel.text = if (conn == true) "Телефоны" else "Подключить"
     }
 
     private fun openBluetooth() {
@@ -1146,6 +1324,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        gocBt = GocBt(this) { refreshBt() }
         appsPage = buildAppsPage()
         autoPage = buildAutoPage()
         dashboard = buildCockpitDashboard()
@@ -1185,6 +1364,8 @@ class MainActivity : Activity() {
 
         setContentView(root)
         select(TAB_HOME)
+        gocBt.start()
+        setBtMode(getPreferences(MODE_PRIVATE).getBoolean("bt_mode", false))
     }
 
     override fun onResume() {
@@ -1194,6 +1375,11 @@ class MainActivity : Activity() {
         handler.removeCallbacks(tick)
         handler.post(tick)
         if (currentTab == TAB_AUTO) startGps()
+    }
+
+    override fun onDestroy() {
+        gocBt.stop()
+        super.onDestroy()
     }
 
     override fun onPause() {
