@@ -735,103 +735,111 @@ class MainActivity : Activity() {
     private lateinit var rpmGauge: GaugeView
     private var locationListener: LocationListener? = null
 
-    /** Icon + "name / value unit" block. */
-    private fun metric(ic: Ico, name: String, value: String, unit: String, big: Boolean = false): LinearLayout =
-        LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            addView(icon(ic, amber, 1.6f), LinearLayout.LayoutParams(34.dp(), 34.dp()).apply { rightMargin = 12.dp() })
-            addView(LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.VERTICAL
-                addView(label(name, 13f, soft).oneLine())
-                addView(LinearLayout(this@MainActivity).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.BOTTOM
-                    addView(label(value, if (big) 26f else 21f, text, true))
-                    addView(label(" $unit", 14f, muted).apply { setPadding(0, 0, 0, 3.dp()) })
-                }, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = 2.dp() })
-            }, LinearLayout.LayoutParams(0, WRAP, 1f))
-        }
-
-    private fun levelMetric(ic: Ico, name: String, value: String, unit: String): LinearLayout =
+    /** Centred "name / [icon] value unit" block for the column between the gauges. */
+    private fun centerMetric(name: String, value: String, unit: String, ic: Ico? = null, prefix: String? = null): LinearLayout =
         LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            addView(metric(ic, name, value, unit))
-            addView(SegmentBar(this@MainActivity, 8), LinearLayout.LayoutParams(MATCH, 7.dp()).apply {
-                topMargin = 6.dp(); leftMargin = 46.dp()
-            })
+            gravity = Gravity.CENTER_HORIZONTAL
+            addView(label(name, 14f, muted).apply { gravity = Gravity.CENTER })
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                if (ic != null) addView(icon(ic, amber, 1.7f), LinearLayout.LayoutParams(24.dp(), 24.dp()).apply { rightMargin = 8.dp() })
+                if (prefix != null) addView(label("$prefix ", 22f, text))
+                addView(label(value, 26f, text, true))
+                addView(label(" $unit", if (unit.length > 3) 14f else 22f, text, unit.length <= 3))
+            }, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = 6.dp() })
         }
 
-    private fun bottomCard(vararg parts: View): LinearLayout = card().apply {
+    /** Icon, name with a segmented bar under it, value on the right. */
+    private fun barRow(ic: Ico, name: String, value: String): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
+        addView(icon(ic, amber, 1.6f), LinearLayout.LayoutParams(30.dp(), 30.dp()).apply { rightMargin = 12.dp() })
+        addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(label(name, 13f, soft).oneLine())
+            addView(SegmentBar(this@MainActivity, 6), LinearLayout.LayoutParams(MATCH, 6.dp()).apply { topMargin = 5.dp() })
+        }, LinearLayout.LayoutParams(0, WRAP, 1f))
+        addView(label(value, 15f, text, true).apply { gravity = Gravity.END },
+            LinearLayout.LayoutParams(64.dp(), WRAP).apply { leftMargin = 10.dp() })
+    }
+
+    private fun twoRowCard(a: View, b: View): LinearLayout = card().apply {
         setPadding(14.dp(), 8.dp(), 14.dp(), 8.dp())
-        parts.forEachIndexed { i, v ->
-            if (i > 0) addView(hLine(), LinearLayout.LayoutParams(1.dp(), MATCH).apply { leftMargin = 12.dp(); rightMargin = 12.dp() })
-            addView(v, LinearLayout.LayoutParams(0, WRAP, 1f))
-        }
+        addView(a, LinearLayout.LayoutParams(MATCH, 0, 1f))
+        addView(hLine(), LinearLayout.LayoutParams(MATCH, 1.dp()).apply { topMargin = 4.dp(); bottomMargin = 4.dp() })
+        addView(b, LinearLayout.LayoutParams(MATCH, 0, 1f))
     }
 
     private fun buildAutoPage(): View {
-        speedGauge = GaugeView(this, 260f, 20f, 4, 1f, "км/ч").apply { caption = "нет сигнала GPS" }
-        rpmGauge = GaugeView(this, 7000f, 1000f, 5, 1000f, "×1000 об/мин", redFrom = 6000f).apply {
+        speedGauge = GaugeView(this, 260f, 20f, 4, 1f, "km/h").apply { caption = "нет сигнала GPS" }
+        rpmGauge = GaugeView(this, 7000f, 1000f, 5, 1000f, "1/min × 1000", redFrom = 6000f).apply {
             readout = "—"; caption = "CAN: нет связи"
         }
 
         val centre = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(10.dp(), 0, 10.dp(), 0)
-            addView(metric(Ico.CLOUD, "Наружная t°", "—", "°C", big = true))
+            gravity = Gravity.CENTER
+            addView(centerMetric("Наружная t°", "—", "°C"))
             addView(hLine(), LinearLayout.LayoutParams(MATCH, 1.dp()).apply { topMargin = 12.dp(); bottomMargin = 12.dp() })
-            addView(metric(Ico.FUEL, "Запас хода", "—", "км", big = true))
+            addView(centerMetric("Запас хода", "—", "км", ic = Ico.FUEL))
             addView(hLine(), LinearLayout.LayoutParams(MATCH, 1.dp()).apply { topMargin = 12.dp(); bottomMargin = 12.dp() })
-            addView(metric(Ico.FUEL_DROP, "Расход Ø", "—", "л/100 км", big = true))
-            addView(label("Скорость: GPS  ·  остальное: CAN не подключён", 11f, dim).apply {
-                gravity = Gravity.CENTER
-                setPadding(0, 12.dp(), 0, 0)
-            }, LinearLayout.LayoutParams(MATCH, WRAP))
+            addView(centerMetric("Расход", "—", "л/100 км", prefix = "Ø"))
         }
 
         val gauges = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             addView(speedGauge, LinearLayout.LayoutParams(0, MATCH, 1f))
-            addView(centre, LinearLayout.LayoutParams(250.dp(), WRAP))
+            addView(centre, LinearLayout.LayoutParams(200.dp(), WRAP).apply { leftMargin = 8.dp(); rightMargin = 8.dp() })
             addView(rpmGauge, LinearLayout.LayoutParams(0, MATCH, 1f))
         }
 
         val route = card().apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(14.dp(), 8.dp(), 14.dp(), 8.dp())
-            addView(icon(Ico.NAV, amber, 1.7f), LinearLayout.LayoutParams(32.dp(), 32.dp()).apply { rightMargin = 12.dp() })
+            setPadding(16.dp(), 10.dp(), 16.dp(), 10.dp())
             addView(LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.VERTICAL
-                addView(label("Карта · Маршрут", 13f, soft))
-                addView(label("Нет активного маршрута", 16f, text, true).oneLine(),
-                    LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = 3.dp() })
-                addView(label((appLabel(effectiveApp(TAB_MAP)) ?: "Навигатор") + "  ›", 13f, amber),
-                    LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = 3.dp() })
-            }, LinearLayout.LayoutParams(0, WRAP, 1f))
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(icon(Ico.NAV, amber, 1.7f), LinearLayout.LayoutParams(24.dp(), 24.dp()).apply { rightMargin = 10.dp() })
+                addView(label("Карта · Маршрут", 15f, text))
+                addView(spacer(), LinearLayout.LayoutParams(0, 1, 1f))
+                addView(label((appLabel(effectiveApp(TAB_MAP)) ?: "Навигатор") + " ›", 12f, amber).oneLine())
+            })
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    addView(label("— км", 22f, text, true))
+                    addView(label("— мин", 16f, soft), LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = 3.dp() })
+                }, LinearLayout.LayoutParams(0, WRAP, 1f))
+                addView(hLine(), LinearLayout.LayoutParams(1.dp(), 40.dp()).apply { rightMargin = 14.dp() })
+                addView(LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = Gravity.CENTER_HORIZONTAL
+                    addView(label("Прибытие", 13f, muted))
+                    addView(label("—:—", 20f, text, true), LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = 3.dp() })
+                }, LinearLayout.LayoutParams(84.dp(), WRAP))
+            }, LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = 4.dp() })
             setOnClickListener { openSelectedApp(TAB_MAP) }
             pressable()
         }
 
         val bottom = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            addView(bottomCard(levelMetric(Ico.OIL, "Уровень масла", "—", "%"), metric(Ico.BATTERY, "Напряжение АКБ", "—", "В")),
-                LinearLayout.LayoutParams(0, MATCH, 1.25f))
-            addView(route, LinearLayout.LayoutParams(0, MATCH, 1f).apply { leftMargin = 10.dp(); rightMargin = 10.dp() })
-            addView(bottomCard(levelMetric(Ico.COOLANT, "ОЖ", "—", "°C"), metric(Ico.THERMO, "Впуск", "—", "°C")),
-                LinearLayout.LayoutParams(0, MATCH, 1.25f))
+            addView(twoRowCard(barRow(Ico.OIL, "Уровень масла", "— %"), barRow(Ico.BATTERY, "Напряжение АКБ", "— В")),
+                LinearLayout.LayoutParams(0, MATCH, 1f))
+            addView(route, LinearLayout.LayoutParams(0, MATCH, 1f).apply { leftMargin = 12.dp(); rightMargin = 12.dp() })
+            addView(twoRowCard(barRow(Ico.COOLANT, "ОЖ", "— °C"), barRow(Ico.THERMO, "Впуск", "— °C")),
+                LinearLayout.LayoutParams(0, MATCH, 1f))
         }
 
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(12.dp(), 6.dp(), 12.dp(), 12.dp())
             addView(gauges, LinearLayout.LayoutParams(MATCH, 0, 1f))
-            addView(bottom, LinearLayout.LayoutParams(MATCH, 92.dp()).apply { topMargin = 6.dp() })
+            addView(bottom, LinearLayout.LayoutParams(MATCH, 104.dp()).apply { topMargin = 8.dp() })
             visibility = View.GONE
         }
     }

@@ -69,11 +69,14 @@ class GaugeView(
 
         // Outer ring.
         p.style = Paint.Style.STROKE
-        p.strokeWidth = 2 * d
-        p.color = amberDim
-        p.setShadowLayer(8 * d, 0f, 0f, amber)
+        p.strokeWidth = 3 * d
+        p.color = amber
+        p.setShadowLayer(14 * d, 0f, 0f, amber)
         canvas.drawCircle(cx, cy, r, p)
         p.clearShadowLayer()
+        p.strokeWidth = 1 * d
+        p.color = Color.parseColor("#3A2614")
+        canvas.drawCircle(cx, cy, r - 4 * d, p)
 
         // Red zone.
         if (redFrom != null) {
@@ -101,9 +104,9 @@ class GaugeView(
             if (major) {
                 val lr = inner - 14 * d
                 p.style = Paint.Style.FILL
-                p.textSize = size * 0.065f
+                p.textSize = size * (if (maxValue / majorStep > 10) 0.052f else 0.068f)
                 p.typeface = Typeface.DEFAULT_BOLD
-                p.color = if (redFrom != null && v >= redFrom) red else textCol
+                p.color = if (redFrom != null && v >= redFrom) red else amber
                 val txt = (v / labelDivider).toInt().toString()
                 canvas.drawText(txt, cx + cos(a).toFloat() * lr, cy + sin(a).toFloat() * lr + p.textSize / 3, p)
             }
@@ -113,9 +116,9 @@ class GaugeView(
         // Unit under centre.
         p.style = Paint.Style.FILL
         p.typeface = Typeface.DEFAULT
-        p.textSize = size * 0.055f
-        p.color = muted
-        canvas.drawText(unit, cx, cy - r * 0.28f, p)
+        p.textSize = size * 0.05f
+        p.color = amber
+        canvas.drawText(unit, cx, cy - r * 0.3f, p)
 
         // Needle.
         val na = Math.toRadians(angleFor(value ?: 0f).toDouble())
@@ -123,8 +126,8 @@ class GaugeView(
         p.style = Paint.Style.STROKE
         p.strokeCap = Paint.Cap.ROUND
         p.strokeWidth = 3.5f * d
-        p.color = if (value == null) amberDim else amber
-        if (value != null) p.setShadowLayer(10 * d, 0f, 0f, amber)
+        p.color = amber
+        p.setShadowLayer(12 * d, 0f, 0f, amber)
         canvas.drawLine(cx - cos(na).toFloat() * 14 * d, cy - sin(na).toFloat() * 14 * d,
             cx + cos(na).toFloat() * len, cy + sin(na).toFloat() * len, p)
         p.clearShadowLayer()
@@ -142,15 +145,15 @@ class GaugeView(
         // Digital readout.
         p.style = Paint.Style.FILL
         p.typeface = Typeface.DEFAULT_BOLD
-        p.textSize = size * 0.15f
-        p.color = textCol
-        p.setShadowLayer(6 * d, 0f, 0f, amber)
-        canvas.drawText(readout, cx, cy + r * 0.55f, p)
+        p.textSize = size * 0.19f
+        p.color = Color.parseColor("#FFE6C4")
+        p.setShadowLayer(10 * d, 0f, 0f, amber)
+        canvas.drawText(readout, cx, cy + r * 0.6f, p)
         p.clearShadowLayer()
         p.typeface = Typeface.DEFAULT
         p.textSize = size * 0.05f
         p.color = muted
-        canvas.drawText(caption, cx, cy + r * 0.72f, p)
+        canvas.drawText(caption, cx, cy + r * 0.78f, p)
     }
 }
 
