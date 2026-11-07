@@ -65,7 +65,7 @@ class GaugeView(
     private val amberHot = c("#FFC46B")
     private val amberDim = c("#6B4722")
     private val red = c("#E5492D")
-    private val labelCol = c("#FFDDA8")
+    private val labelCol = c("#F7A341")
     private val muted = c("#B6A99B")
     private val d = resources.displayMetrics.density
 
@@ -110,13 +110,13 @@ class GaugeView(
         // Soft outer halo.
         p.style = Paint.Style.FILL
         p.shader = RadialGradient(cx, cy, r + 12 * d,
-            intArrayOf(Color.TRANSPARENT, alphaOf(amber, 80), Color.TRANSPARENT),
-            floatArrayOf(0.86f, 0.93f, 1f), Shader.TileMode.CLAMP)
+            intArrayOf(Color.TRANSPARENT, alphaOf(amber, 150), alphaOf(amber, 40), Color.TRANSPARENT),
+            floatArrayOf(0.84f, 0.92f, 0.97f, 1f), Shader.TileMode.CLAMP)
         canvas.drawCircle(cx, cy, r + 12 * d, p)
 
         // Bezel: warm metallic sweep.
         p.shader = SweepGradient(cx, cy,
-            intArrayOf(c("#3A2410"), c("#C98432"), c("#3A2410"), c("#7A4C1C"), c("#3A2410")), null)
+            intArrayOf(c("#7A3E0C"), c("#FF9A2E"), c("#B8621A"), c("#FFB04A"), c("#7A3E0C")), null)
         canvas.drawCircle(cx, cy, r, p)
 
         // Face.

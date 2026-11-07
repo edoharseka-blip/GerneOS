@@ -204,15 +204,15 @@ class MainActivity : Activity() {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
         setPadding(22.dp(), 0, 22.dp(), 0)
-        addView(label("E90 OS", 24f, amber, true))
-        addView(label("  —  COCKPIT", 22f, soft).apply { letterSpacing = 0.04f })
+        addView(label("E90 OS", 23f, text, true))
+        addView(label("BMW E90", 14f, muted).apply { setPadding(16.dp(), 3.dp(), 0, 0) })
         addView(spacer(), LinearLayout.LayoutParams(0, 1, 1f))
-        btIcon = icon(Ico.BT, amber, 1.9f)
-        addView(btIcon, LinearLayout.LayoutParams(24.dp(), 24.dp()).apply { rightMargin = 18.dp() })
+        btIcon = icon(Ico.BT, text, 1.8f)
+        addView(btIcon, LinearLayout.LayoutParams(20.dp(), 20.dp()).apply { rightMargin = 16.dp() })
         wifiIcon = icon(Ico.WIFI, text, 1.9f)
-        addView(wifiIcon, LinearLayout.LayoutParams(26.dp(), 24.dp()).apply { rightMargin = 18.dp() })
-        addView(hLine(edgeHi), LinearLayout.LayoutParams(1.dp(), 24.dp()).apply { rightMargin = 18.dp() })
-        clock = label("", 26f, amber, true)
+        addView(wifiIcon, LinearLayout.LayoutParams(22.dp(), 20.dp()).apply { rightMargin = 16.dp() })
+        addView(icon(Ico.SIGNAL, text, 1.8f), LinearLayout.LayoutParams(20.dp(), 20.dp()).apply { rightMargin = 22.dp() })
+        clock = label("", 22f, text)
         addView(clock)
     }
 
@@ -220,33 +220,32 @@ class MainActivity : Activity() {
         val bt = runCatching { BluetoothAdapter.getDefaultAdapter()?.isEnabled == true }.getOrDefault(false)
         val wifi = runCatching { applicationContext.getSystemService(WifiManager::class.java)?.isWifiEnabled == true }
             .getOrDefault(false)
-        btIcon.color = rgb(if (bt) amber else "#4A4038")
+        btIcon.color = rgb(if (bt) text else "#4A4038")
         wifiIcon.color = rgb(if (wifi) text else "#4A4038")
     }
 
     private fun sideNav(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        setPadding(8.dp(), 10.dp(), 0, 10.dp())
+        background = grad("#120E0B", "#0B0908", 14, "#2A1F16")
+        setPadding(6.dp(), 10.dp(), 6.dp(), 10.dp())
         val items = listOf(Ico.HOME to "Главная", Ico.MUSIC to "Музыка", Ico.PIN to "Карта", Ico.CAR to "Авто", Ico.GEAR to "Настройки")
         items.forEachIndexed { index, (ic, title) ->
-            if (index > 0) addView(hLine("#221A14"), LinearLayout.LayoutParams(MATCH, 1.dp()).apply {
-                leftMargin = 14.dp(); rightMargin = 14.dp()
-            })
             val item = LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.VERTICAL
-                gravity = Gravity.CENTER
-                val iv = icon(ic, text, 1.8f)
-                val tv = label(title, 14f, text).apply { gravity = Gravity.CENTER; setPadding(0, 4.dp(), 0, 0) }
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(12.dp(), 0, 6.dp(), 0)
+                val iv = icon(ic, text, 1.7f)
+                val tv = label(title, 15f, text).oneLine()
                 navIcons.add(iv)
                 navLabels.add(tv)
-                addView(iv, LinearLayout.LayoutParams(30.dp(), 30.dp()))
-                addView(tv)
+                addView(iv, LinearLayout.LayoutParams(22.dp(), 22.dp()).apply { rightMargin = 12.dp() })
+                addView(tv, LinearLayout.LayoutParams(0, WRAP, 1f))
                 setOnClickListener { onTab(index) }
                 if (index == TAB_MUSIC || index == TAB_MAP) setOnLongClickListener { chooseApp(index); true }
                 pressable()
             }
             navItems.add(item)
-            addView(item, LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = 2.dp(); bottomMargin = 2.dp() })
+            addView(item, LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = 4.dp(); bottomMargin = 4.dp() })
         }
     }
 
@@ -269,9 +268,9 @@ class MainActivity : Activity() {
         val activeNav = if (index == TAB_APPS) TAB_SETTINGS else index
         navItems.forEachIndexed { i, item ->
             val active = i == activeNav
-            item.background = if (active) grad("#5A3511", "#2A190B", 12, amber) else null
-            navIcons[i].color = rgb(if (active) amber else text)
-            navLabels[i].setTextColor(rgb(if (active) amber else text))
+            item.background = if (active) grad("#4E3424", "#33221A", 10, "#5A3E2A") else null
+            navIcons[i].color = rgb(if (active) "#FFE3C2" else soft)
+            navLabels[i].setTextColor(rgb(if (active) "#FFFFFF" else soft))
             navLabels[i].typeface = if (active) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
         }
     }
@@ -848,15 +847,21 @@ class MainActivity : Activity() {
             readout = "—"; caption = "CAN: нет связи"
         }
 
-        val centre = buildCentrePanel()
+        val centre = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            addView(centerMetric("Наружная t°", "—", "°C"))
+            addView(FadeLine(this@MainActivity, rgb("#5A4430")), LinearLayout.LayoutParams(MATCH, 1.dp()).apply { topMargin = 12.dp(); bottomMargin = 12.dp() })
+            addView(centerMetric("Запас хода", "—", "км", ic = Ico.FUEL))
+            addView(FadeLine(this@MainActivity, rgb("#5A4430")), LinearLayout.LayoutParams(MATCH, 1.dp()).apply { topMargin = 12.dp(); bottomMargin = 12.dp() })
+            addView(centerMetric("Расход", "—", "л/100 км", prefix = "Ø"))
+        }
 
         val gauges = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             addView(speedGauge, LinearLayout.LayoutParams(0, MATCH, 1f))
-            addView(centre, LinearLayout.LayoutParams(214.dp(), MATCH).apply {
-                leftMargin = 6.dp(); rightMargin = 6.dp(); topMargin = 14.dp(); bottomMargin = 14.dp()
-            })
+            addView(centre, LinearLayout.LayoutParams(190.dp(), WRAP).apply { leftMargin = 6.dp(); rightMargin = 6.dp() })
             addView(rpmGauge, LinearLayout.LayoutParams(0, MATCH, 1f))
         }
 
@@ -912,7 +917,6 @@ class MainActivity : Activity() {
         speedGauge.value = kmh
         speedGauge.readout = kmh?.let { Math.round(it).toString() } ?: "—"
         speedGauge.caption = if (kmh == null) "нет сигнала GPS" else "GPS"
-        gpsChip.setTextColor(rgb(if (kmh == null) dim else "#8FBF6A"))
     }
 
     private fun startGps() {
@@ -1046,8 +1050,9 @@ class MainActivity : Activity() {
 
         val center = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            addView(sideNav(), LinearLayout.LayoutParams(124.dp(), MATCH))
-            addView(hLine("#2A1F16"), LinearLayout.LayoutParams(1.dp(), MATCH).apply { leftMargin = 8.dp() })
+            addView(sideNav(), LinearLayout.LayoutParams(150.dp(), MATCH).apply {
+                leftMargin = 10.dp(); topMargin = 10.dp(); bottomMargin = 10.dp()
+            })
             addView(content, LinearLayout.LayoutParams(0, MATCH, 1f))
         }
         val root = LinearLayout(this).apply {
@@ -1056,7 +1061,7 @@ class MainActivity : Activity() {
             addView(topBar(), LinearLayout.LayoutParams(MATCH, 48.dp()))
             addView(View(this@MainActivity).apply {
                 background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
-                    intArrayOf(rgb("#2A1A0B"), rgb(amber), rgb("#2A1A0B")))
+                    intArrayOf(rgb("#0B0908"), rgb("#2E241C"), rgb("#0B0908")))
             }, LinearLayout.LayoutParams(MATCH, 1.dp()))
             addView(center, LinearLayout.LayoutParams(MATCH, 0, 1f))
         }
