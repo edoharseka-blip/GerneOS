@@ -446,7 +446,7 @@ class MainActivity : Activity() {
         val right = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(buildCarPanel(), LinearLayout.LayoutParams(MATCH, 0, 1f))
-            addView(buildQuickAccess(), LinearLayout.LayoutParams(MATCH, 104.dp()).apply { topMargin = 10.dp() })
+            addView(buildQuickAccess(), LinearLayout.LayoutParams(MATCH, 112.dp()).apply { topMargin = 10.dp() })
         }
         refreshQuickAccess()
         return LinearLayout(this).apply {
@@ -467,15 +467,12 @@ class MainActivity : Activity() {
             cell.removeAllViews()
             val component = quickComponent(index)
             val appIcon = component?.let { runCatching { packageManager.getActivityIcon(it) }.getOrNull() }
+            cell.contentDescription = appLabel(component) ?: "Добавить"
             if (appIcon != null) {
-                cell.addView(ImageView(this).apply { setImageDrawable(appIcon) }, LinearLayout.LayoutParams(32.dp(), 32.dp()))
+                cell.addView(ImageView(this).apply { setImageDrawable(appIcon) }, LinearLayout.LayoutParams(54.dp(), 54.dp()))
             } else {
-                cell.addView(icon(Ico.PLUS, amber, 1.7f), LinearLayout.LayoutParams(30.dp(), 30.dp()))
+                cell.addView(icon(Ico.PLUS, amber, 1.5f), LinearLayout.LayoutParams(40.dp(), 40.dp()))
             }
-            cell.addView(label(appLabel(component) ?: "Добавить", 14f, text).apply {
-                gravity = Gravity.CENTER
-                setPadding(4.dp(), 4.dp(), 4.dp(), 0)
-            }.oneLine(), LinearLayout.LayoutParams(MATCH, WRAP))
         }
     }
 
@@ -751,6 +748,79 @@ class MainActivity : Activity() {
             }, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = 6.dp() })
         }
 
+    private lateinit var gpsChip: TextView
+
+    private fun chip(textValue: String, hex: String): TextView = label(textValue, 11f, hex, true).apply {
+        gravity = Gravity.CENTER
+        letterSpacing = 0.08f
+        setPadding(10.dp(), 4.dp(), 10.dp(), 4.dp())
+        background = box("#120E0B", 10, "#3A2A1C")
+    }
+
+    /** Small round icon badge with a faint amber ring. */
+    private fun badge(ic: Ico): FrameLayout = FrameLayout(this).apply {
+        background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            colors = intArrayOf(rgb("#3A2410"), rgb("#1A120B"))
+            gradientType = GradientDrawable.RADIAL_GRADIENT
+            gradientRadius = 22.dp().toFloat()
+            setStroke(1.dp(), rgb(edgeHi))
+        }
+        addView(icon(ic, amber, 1.7f), FrameLayout.LayoutParams(20.dp(), 20.dp(), Gravity.CENTER))
+    }
+
+    private fun tile(ic: Ico, name: String, value: String, unit: String): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        addView(badge(ic), LinearLayout.LayoutParams(38.dp(), 38.dp()).apply { rightMargin = 12.dp() })
+        addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(label(name.uppercase(), 10f, muted, true).apply { letterSpacing = 0.12f })
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.BOTTOM
+                addView(label(value, 24f, text, true))
+                addView(label(" $unit", 13f, muted).apply { setPadding(0, 0, 0, 3.dp()) })
+            }, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = 2.dp() })
+        }, LinearLayout.LayoutParams(0, WRAP, 1f))
+    }
+
+    /** Glass panel between the gauges: outside temperature, range, consumption, data sources. */
+    private fun buildCentrePanel(): View = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER_HORIZONTAL
+        background = grad("#1C140E", "#0A0807", 18, "#3A2A1C")
+        setPadding(16.dp(), 0, 16.dp(), 10.dp())
+
+        addView(FadeLine(this@MainActivity, rgb(amber)), LinearLayout.LayoutParams(MATCH, 2.dp()).apply {
+            leftMargin = 10.dp(); rightMargin = 10.dp()
+        })
+        addView(label("СНАРУЖИ", 10f, muted, true).apply { letterSpacing = 0.2f },
+            LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = 10.dp() })
+        addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(icon(Ico.CLOUD, amber, 1.6f), LinearLayout.LayoutParams(30.dp(), 30.dp()).apply { rightMargin = 10.dp() })
+            addView(label("—", 38f, text).apply { typeface = Typeface.create("sans-serif-light", Typeface.NORMAL) })
+            addView(label(" °C", 18f, muted))
+        }, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = 2.dp() })
+
+        addView(FadeLine(this@MainActivity, rgb(edgeHi)), LinearLayout.LayoutParams(MATCH, 1.dp()).apply {
+            topMargin = 8.dp(); bottomMargin = 10.dp()
+        })
+        addView(tile(Ico.FUEL, "Запас хода", "—", "км"), LinearLayout.LayoutParams(MATCH, WRAP))
+        addView(tile(Ico.FUEL_DROP, "Расход Ø", "—", "л/100 км"), LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = 10.dp() })
+
+        addView(spacer(), LinearLayout.LayoutParams(1, 0, 1f))
+        addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            gpsChip = chip("● GPS", dim)
+            addView(gpsChip)
+            addView(chip("● CAN", "#D9734A"), LinearLayout.LayoutParams(WRAP, WRAP).apply { leftMargin = 8.dp() })
+        })
+    }
+
     /** Icon, name with a segmented bar under it, value on the right. */
     private fun barRow(ic: Ico, name: String, value: String): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
@@ -778,21 +848,15 @@ class MainActivity : Activity() {
             readout = "—"; caption = "CAN: нет связи"
         }
 
-        val centre = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            addView(centerMetric("Наружная t°", "—", "°C"))
-            addView(hLine(), LinearLayout.LayoutParams(MATCH, 1.dp()).apply { topMargin = 12.dp(); bottomMargin = 12.dp() })
-            addView(centerMetric("Запас хода", "—", "км", ic = Ico.FUEL))
-            addView(hLine(), LinearLayout.LayoutParams(MATCH, 1.dp()).apply { topMargin = 12.dp(); bottomMargin = 12.dp() })
-            addView(centerMetric("Расход", "—", "л/100 км", prefix = "Ø"))
-        }
+        val centre = buildCentrePanel()
 
         val gauges = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             addView(speedGauge, LinearLayout.LayoutParams(0, MATCH, 1f))
-            addView(centre, LinearLayout.LayoutParams(200.dp(), WRAP).apply { leftMargin = 8.dp(); rightMargin = 8.dp() })
+            addView(centre, LinearLayout.LayoutParams(214.dp(), MATCH).apply {
+                leftMargin = 6.dp(); rightMargin = 6.dp(); topMargin = 14.dp(); bottomMargin = 14.dp()
+            })
             addView(rpmGauge, LinearLayout.LayoutParams(0, MATCH, 1f))
         }
 
@@ -848,6 +912,7 @@ class MainActivity : Activity() {
         speedGauge.value = kmh
         speedGauge.readout = kmh?.let { Math.round(it).toString() } ?: "—"
         speedGauge.caption = if (kmh == null) "нет сигнала GPS" else "GPS"
+        gpsChip.setTextColor(rgb(if (kmh == null) dim else "#8FBF6A"))
     }
 
     private fun startGps() {
