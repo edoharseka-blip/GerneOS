@@ -9,7 +9,7 @@ import android.view.View
 import kotlin.math.min
 
 /** Line icons drawn on a 24x24 grid, so they stay sharp at any size and take any colour. */
-enum class Ico { HOME, MUSIC, PIN, CAR, GEAR, GRID, BT, WIFI, CLOUD, BATTERY, COOLANT, THERMO, OIL, FUEL, FUEL_DROP, PENCIL, PLUS, PREV, NEXT, PLAY, PAUSE, NAV, SIGNAL }
+enum class Ico { HOME, MUSIC, PIN, CAR, GEAR, GRID, BT, WIFI, CLOUD, BATTERY, COOLANT, THERMO, OIL, FUEL, FUEL_DROP, PENCIL, PLUS, PREV, NEXT, PLAY, PAUSE, NAV, SIGNAL, ADD }
 
 class IconView(context: Context, icon: Ico, color: Int, private val strokeUnits: Float = 1.7f) : View(context) {
 
@@ -162,6 +162,7 @@ class IconView(context: Context, icon: Ico, color: Int, private val strokeUnits:
                 Ico.NEXT -> { rrect(16.5f, 5f, 19f, 19f, 0.8f, true); poly(true, true, 5f, 5f, 15.5f, 12f, 5f, 19f) }
                 Ico.PLAY -> poly(true, true, 7f, 4f, 20f, 12f, 7f, 20f)
                 Ico.PAUSE -> { rrect(6f, 4f, 10f, 20f, 1f, true); rrect(14f, 4f, 18f, 20f, 1f, true) }
+                Ico.ADD -> { line(12f, 5f, 12f, 19f); line(5f, 12f, 19f, 12f) }
                 Ico.SIGNAL -> {
                     rrect(3f, 16f, 6f, 21f, 0.8f, true); rrect(8f, 12f, 11f, 21f, 0.8f, true)
                     rrect(13f, 8f, 16f, 21f, 0.8f, true); rrect(18f, 3.5f, 21f, 21f, 0.8f, true)

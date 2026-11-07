@@ -112,11 +112,73 @@ class MainActivity : Activity() {
     private var isPlaying = false
     private var lastArt: Any? = null
 
+    /** Value labels that live data updates, by key ("range", "cons", ...), with their unit suffix. */
+    private val bound = mutableMapOf<String, MutableList<Pair<TextView, String>>>()
+    private fun bind(key: String?, tv: TextView, suffix: String = ""): TextView {
+        if (key != null) bound.getOrPut(key) { mutableListOf() }.add(tv to suffix)
+        return tv
+    }
+    private fun show(key: String, value: String?) {
+        bound[key]?.forEach { (tv, suffix) -> tv.text = (value ?: "—") + suffix }
+    }
+
+    private var canSpeed: Int? = null
+    private var gpsSpeed: Float? = null
+    private var canAlive = false
+    private val canChips = mutableListOf<TextView>()
+
+    private fun fmt1(v: Float) = String.format(Locale("ru"), "%.1f", v)
+
+    /** Pull the latest CAN frame from the KSW service and push it into every bound label. */
+    private fun refreshCar() {
+        val st = KswCar.read()
+        canAlive = st != null
+        show("outside", st?.outsideTemp?.let { fmt1(it) })
+        show("range", st?.range?.takeIf { it > 0 }?.toString())
+        show("cons", st?.consumption?.takeIf { it > 0f }?.let { fmt1(it) })
+        canSpeed = st?.speed
+        rpmGauge.value = st?.rpm?.toFloat()
+        rpmGauge.readout = st?.rpm?.let { String.format(Locale("ru"), "%.1f", it / 1000f) } ?: "—"
+        rpmGauge.caption = if (st != null) "CAN" else "CAN: нет данных"
+        canChips.forEach { it.setTextColor(rgb(if (canAlive) "#8FBF6A" else "#D9734A")) }
+        updateSpeed()
+        refreshRoute()
+    }
+
+    private fun updateSpeed() {
+        val v = canSpeed?.toFloat() ?: gpsSpeed
+        speedGauge.value = v
+        speedGauge.readout = v?.let { Math.round(it).toString() } ?: "—"
+        speedGauge.caption = when {
+            canSpeed != null -> "CAN"
+            gpsSpeed != null -> "GPS"
+            locationListener != null -> "поиск GPS…"
+            else -> "нет данных"
+        }
+    }
+
+    private fun refreshRoute() {
+        val r = RouteState.info?.takeIf { System.currentTimeMillis() - it.time < 10 * 60_000L }
+        if (r == null) {
+            bound["route_title"]?.forEach { it.first.text = "Нет активного маршрута" }
+            bound["route_dist"]?.forEach { it.first.text = "—" }
+            bound["route_dur"]?.forEach { it.first.text = "" }
+            bound["route_eta"]?.forEach { it.first.text = "—:—" }
+            return
+        }
+        val (dist, dur, eta) = RouteState.parse(r)
+        bound["route_title"]?.forEach { it.first.text = r.title.ifBlank { r.text } }
+        bound["route_dist"]?.forEach { it.first.text = dist ?: "—" }
+        bound["route_dur"]?.forEach { it.first.text = dur ?: "" }
+        bound["route_eta"]?.forEach { it.first.text = eta ?: "—:—" }
+    }
+
     private val tick = object : Runnable {
         override fun run() {
             clock.text = timeFmt.format(Date())
             refreshStatusIcons()
             refreshMedia()
+            if (currentTab == TAB_HOME || currentTab == TAB_AUTO) refreshCar()
             handler.postDelayed(this, 1000)
         }
     }
@@ -352,7 +414,7 @@ class MainActivity : Activity() {
     }
 
     /** Icon + title + big value card used by the on-board computer. */
-    private fun valueCard(ic: Ico, title: String, value: String, unit: String): LinearLayout = card().apply {
+    private fun valueCard(ic: Ico, title: String, value: String, unit: String, key: String? = null): LinearLayout = card().apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
         setPadding(16.dp(), 6.dp(), 12.dp(), 6.dp())
@@ -363,7 +425,7 @@ class MainActivity : Activity() {
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.BOTTOM
-                addView(label(value, 30f, text, true))
+                addView(bind(key, label(value, 30f, text, true)))
                 addView(label(" $unit", 19f, text, true).apply { setPadding(0, 0, 0, 2.dp()) })
             }, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = 4.dp() })
         }, LinearLayout.LayoutParams(0, WRAP, 1f))
@@ -386,7 +448,7 @@ class MainActivity : Activity() {
             addView(spacer(), LinearLayout.LayoutParams(0, 1, 1f))
             addView(hLine(amber), LinearLayout.LayoutParams(2.dp(), 22.dp()).apply { rightMargin = 14.dp() })
             addView(icon(Ico.CLOUD, text, 1.6f), LinearLayout.LayoutParams(28.dp(), 28.dp()).apply { rightMargin = 10.dp() })
-            addView(label("— °C", 22f, text, true))
+            addView(bind("outside", label("— °C", 22f, text, true), " °C"))
             setPadding(2.dp(), 0, 8.dp(), 0)
             setOnClickListener { select(TAB_AUTO) }
         }, LinearLayout.LayoutParams(MATCH, 34.dp()))
@@ -409,7 +471,7 @@ class MainActivity : Activity() {
         }
         addView(oil, LinearLayout.LayoutParams(MATCH, 0, 0.8f).apply { topMargin = 8.dp() })
 
-        addView(pair(valueCard(Ico.FUEL, "Запас хода", "—", "км"), valueCard(Ico.FUEL_DROP, "Расход", "—", "л/100 км")),
+        addView(pair(valueCard(Ico.FUEL, "Запас хода", "—", "км", "range"), valueCard(Ico.FUEL_DROP, "Расход", "—", "л/100 км", "cons")),
             LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = 8.dp() })
     }
 
@@ -425,20 +487,24 @@ class MainActivity : Activity() {
                 pressable()
             }, LinearLayout.LayoutParams(24.dp(), 24.dp()))
         }, LinearLayout.LayoutParams(MATCH, 26.dp()))
-        val strip = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
+        val strip = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
         repeat(4) { index ->
+            val slot = FrameLayout(this@MainActivity)
             val cell = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
-                background = grad("#211A14", "#17120F", 10, edge)
                 setOnClickListener { openQuickApp(index) }
                 setOnLongClickListener { chooseQuickApp(index); true }
                 pressable()
             }
             shortcutCells.add(cell)
-            strip.addView(cell, LinearLayout.LayoutParams(0, MATCH, 1f).apply { if (index > 0) leftMargin = 12.dp() })
+            slot.addView(cell, FrameLayout.LayoutParams(64.dp(), 64.dp(), Gravity.CENTER))
+            strip.addView(slot, LinearLayout.LayoutParams(0, MATCH, 1f))
         }
-        addView(strip, LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = 6.dp() })
+        addView(strip, LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = 4.dp() })
     }
 
     private fun buildCockpitDashboard(): View {
@@ -451,9 +517,42 @@ class MainActivity : Activity() {
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(14.dp(), 12.dp(), 14.dp(), 12.dp())
-            addView(buildPlayer(), LinearLayout.LayoutParams(0, MATCH, 0.78f).apply { rightMargin = 16.dp() })
+            addView(FrameLayout(this@MainActivity).apply {
+                addView(buildPlayer(), FrameLayout.LayoutParams(MATCH, MATCH))
+                addView(btButton(), FrameLayout.LayoutParams(WRAP, 36.dp(), Gravity.TOP or Gravity.END).apply {
+                    topMargin = 12.dp(); rightMargin = 12.dp()
+                })
+            }, LinearLayout.LayoutParams(0, MATCH, 0.78f).apply { rightMargin = 16.dp() })
             addView(right, LinearLayout.LayoutParams(0, MATCH, 1.22f))
         }
+    }
+
+    /** Opens the head unit's own Bluetooth app (KSW) to pair a phone and play its music. */
+    private fun btButton(): View = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(10.dp(), 0, 12.dp(), 0)
+        background = grad("#2A1D12", "#1A120C", 18, edgeHi)
+        addView(icon(Ico.BT, amber, 1.9f), LinearLayout.LayoutParams(18.dp(), 18.dp()).apply { rightMargin = 6.dp() })
+        addView(label("Телефон", 13f, text, true))
+        setOnClickListener { openBluetooth() }
+        setOnLongClickListener {
+            runCatching { startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }; true
+        }
+        pressable()
+    }
+
+    private fun openBluetooth() {
+        val tries = listOf(
+            Intent("com.wits.bt.action.OPEN").setPackage("com.wits.ksw.bt"),
+            packageManager.getLaunchIntentForPackage("com.wits.ksw.bt"),
+            Intent(Settings.ACTION_BLUETOOTH_SETTINGS),
+        )
+        for (i in tries) {
+            if (i == null) continue
+            if (runCatching { startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }.isSuccess) return
+        }
+        toast("Bluetooth недоступен")
     }
 
     // ---------- quick access ----------
@@ -468,9 +567,23 @@ class MainActivity : Activity() {
             val appIcon = component?.let { runCatching { packageManager.getActivityIcon(it) }.getOrNull() }
             cell.contentDescription = appLabel(component) ?: "Добавить"
             if (appIcon != null) {
-                cell.addView(ImageView(this).apply { setImageDrawable(appIcon) }, LinearLayout.LayoutParams(54.dp(), 54.dp()))
+                cell.background = GradientDrawable().apply {
+                    gradientType = GradientDrawable.RADIAL_GRADIENT
+                    gradientRadius = 46.dp().toFloat()
+                    colors = intArrayOf(rgb("#3A2716"), rgb("#16110D"))
+                    cornerRadius = 18.dp().toFloat()
+                    setStroke(1.dp(), rgb("#5A3E26"))
+                }
+                cell.elevation = 6.dp().toFloat()
+                cell.addView(ImageView(this).apply { setImageDrawable(appIcon) }, LinearLayout.LayoutParams(44.dp(), 44.dp()))
             } else {
-                cell.addView(icon(Ico.PLUS, amber, 1.5f), LinearLayout.LayoutParams(40.dp(), 40.dp()))
+                cell.background = GradientDrawable().apply {
+                    setColor(rgb("#120E0B"))
+                    cornerRadius = 18.dp().toFloat()
+                    setStroke(1.dp(), rgb("#6A4A2A"), 5.dp().toFloat(), 4.dp().toFloat())
+                }
+                cell.elevation = 0f
+                cell.addView(icon(Ico.ADD, amber, 1.6f), LinearLayout.LayoutParams(26.dp(), 26.dp()))
             }
         }
     }
@@ -732,7 +845,7 @@ class MainActivity : Activity() {
     private var locationListener: LocationListener? = null
 
     /** Centred "name / [icon] value unit" block for the column between the gauges. */
-    private fun centerMetric(name: String, value: String, unit: String, ic: Ico? = null, prefix: String? = null): LinearLayout =
+    private fun centerMetric(name: String, value: String, unit: String, ic: Ico? = null, prefix: String? = null, key: String? = null): LinearLayout =
         LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
@@ -742,7 +855,7 @@ class MainActivity : Activity() {
                 gravity = Gravity.CENTER_VERTICAL
                 if (ic != null) addView(icon(ic, amber, 1.7f), LinearLayout.LayoutParams(24.dp(), 24.dp()).apply { rightMargin = 8.dp() })
                 if (prefix != null) addView(label("$prefix ", 22f, text))
-                addView(label(value, 30f, text, true))
+                addView(bind(key, label(value, 30f, text, true)))
                 addView(label(" $unit", if (unit.length > 3) 15f else 26f, text, unit.length <= 3))
             }, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = 6.dp() })
         }
@@ -844,17 +957,17 @@ class MainActivity : Activity() {
     private fun buildAutoPage(): View {
         speedGauge = GaugeView(this, 260f, 20f, 4, 1f, "km/h").apply { caption = "нет сигнала GPS" }
         rpmGauge = GaugeView(this, 7000f, 1000f, 5, 1000f, "1/min × 1000", redFrom = 6000f).apply {
-            readout = "—"; caption = "CAN: нет связи"
+            readout = "—"; caption = "CAN: нет данных"
         }
 
         val centre = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            addView(centerMetric("Наружная t°", "—", "°C"))
+            addView(centerMetric("Наружная t°", "—", "°C", key = "outside"))
             addView(FadeLine(this@MainActivity, rgb("#5A4430")), LinearLayout.LayoutParams(MATCH, 1.dp()).apply { topMargin = 12.dp(); bottomMargin = 12.dp() })
-            addView(centerMetric("Запас хода", "—", "км", ic = Ico.FUEL))
+            addView(centerMetric("Запас хода", "—", "км", ic = Ico.FUEL, key = "range"))
             addView(FadeLine(this@MainActivity, rgb("#5A4430")), LinearLayout.LayoutParams(MATCH, 1.dp()).apply { topMargin = 12.dp(); bottomMargin = 12.dp() })
-            addView(centerMetric("Расход", "—", "л/100 км", prefix = "Ø"))
+            addView(centerMetric("Расход", "—", "л/100 км", prefix = "Ø", key = "cons"))
         }
 
         val gauges = LinearLayout(this).apply {
@@ -880,15 +993,16 @@ class MainActivity : Activity() {
                 gravity = Gravity.CENTER_VERTICAL
                 addView(LinearLayout(this@MainActivity).apply {
                     orientation = LinearLayout.VERTICAL
-                    addView(label("— км", 22f, text, true))
-                    addView(label("— мин", 16f, soft), LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = 3.dp() })
+                    addView(bind("route_title", label("Нет активного маршрута", 12f, muted).oneLine()))
+                    addView(bind("route_dist", label("—", 22f, text, true)), LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = 2.dp() })
+                    addView(bind("route_dur", label("", 15f, soft)), LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = 2.dp() })
                 }, LinearLayout.LayoutParams(0, WRAP, 1f))
                 addView(hLine(), LinearLayout.LayoutParams(1.dp(), 40.dp()).apply { rightMargin = 14.dp() })
                 addView(LinearLayout(this@MainActivity).apply {
                     orientation = LinearLayout.VERTICAL
                     gravity = Gravity.CENTER_HORIZONTAL
                     addView(label("Прибытие", 13f, muted))
-                    addView(label("—:—", 20f, text, true), LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = 3.dp() })
+                    addView(bind("route_eta", label("—:—", 20f, text, true)), LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = 3.dp() })
                 }, LinearLayout.LayoutParams(84.dp(), WRAP))
             }, LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = 4.dp() })
             setOnClickListener { openSelectedApp(TAB_MAP) }
@@ -914,9 +1028,8 @@ class MainActivity : Activity() {
     }
 
     private fun showSpeed(kmh: Float?) {
-        speedGauge.value = kmh
-        speedGauge.readout = kmh?.let { Math.round(it).toString() } ?: "—"
-        speedGauge.caption = if (kmh == null) "нет сигнала GPS" else "GPS"
+        gpsSpeed = kmh
+        updateSpeed()
     }
 
     private fun startGps() {
@@ -941,7 +1054,6 @@ class MainActivity : Activity() {
             lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 500L, 0f, listener, Looper.getMainLooper())
             locationListener = listener
             showSpeed(null)
-            speedGauge.caption = "поиск GPS…"
         } catch (e: Exception) {
             showSpeed(null)
             speedGauge.caption = "GPS недоступен"
