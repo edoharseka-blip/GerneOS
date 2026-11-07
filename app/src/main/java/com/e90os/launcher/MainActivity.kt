@@ -167,7 +167,12 @@ class MainActivity : Activity() {
             return
         }
         val (dist, dur, eta) = RouteState.parse(r)
-        bound["route_title"]?.forEach { it.first.text = r.title.ifBlank { r.text } }
+        val caption = when {
+            dist == null && eta == null -> r.title.ifBlank { r.text }
+            r.text.isNotBlank() -> r.text
+            else -> "До манёвра"
+        }
+        bound["route_title"]?.forEach { it.first.text = caption }
         bound["route_dist"]?.forEach { it.first.text = dist ?: "—" }
         bound["route_dur"]?.forEach { it.first.text = dur ?: "" }
         bound["route_eta"]?.forEach { it.first.text = eta ?: "—:—" }
