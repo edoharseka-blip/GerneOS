@@ -967,7 +967,7 @@ class MainActivity : Activity() {
         }
         accessButton.visibility = View.GONE
 
-        val c = pickSession(sessions.filter { it.packageName != GocBt.PKG })
+        val c = pickSession(sessions)
         controller = c
         // A phone/app track started playing while the Bluetooth view is open: show it.
         val nowPlaying = c?.playbackState?.state == PlaybackState.STATE_PLAYING
