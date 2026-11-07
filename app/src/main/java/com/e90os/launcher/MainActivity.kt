@@ -549,6 +549,7 @@ class MainActivity : Activity() {
     private lateinit var segBt: TextView
     private var btMode = false
     private lateinit var gocBt: GocBt
+    private lateinit var btMusic: BtMusic
 
     private lateinit var btStatus: TextView
     private lateinit var btDevice: TextView
@@ -674,7 +675,8 @@ class MainActivity : Activity() {
             when (code) {
                 KeyEvent.KEYCODE_MEDIA_PREVIOUS -> c.transportControls.skipToPrevious()
                 KeyEvent.KEYCODE_MEDIA_NEXT -> c.transportControls.skipToNext()
-                else -> if (c.playbackState?.state == PlaybackState.STATE_PLAYING) c.transportControls.pause() else c.transportControls.play()
+                else -> if (c.playbackState?.state == PlaybackState.STATE_PLAYING || btMusic.playing == true)
+                    c.transportControls.pause() else c.transportControls.play()
             }
         } else if (gocBt.connected == false) {
             openBluetooth()
@@ -712,10 +714,12 @@ class MainActivity : Activity() {
         val st = c?.playbackState
         val playing = st?.state == PlaybackState.STATE_PLAYING
         btTitle.text = md?.getString(MediaMetadata.METADATA_KEY_TITLE)?.takeIf { it.isNotBlank() }
+            ?: btMusic.title?.takeIf { conn != false }
             ?: if (conn == true) "Музыка телефона" else "Нет трека"
         btArtist.text = md?.getString(MediaMetadata.METADATA_KEY_ARTIST)?.takeIf { it.isNotBlank() }
+            ?: (if (btMusic.title != null && conn != false) "Bluetooth · телефон" else null)
             ?: if (conn == true) "Нажмите ▶ или включите музыку на телефоне" else "Нажмите «Подключить»"
-        btPlayIcon.icon = if (playing) Ico.PAUSE else Ico.PLAY
+        btPlayIcon.icon = if (playing || btMusic.playing == true) Ico.PAUSE else Ico.PLAY
         val dur = md?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L
         var pos = st?.position ?: 0L
         if (playing && st != null) pos += ((SystemClock.elapsedRealtime() - st.lastPositionUpdateTime) * st.playbackSpeed).toLong()
@@ -974,7 +978,7 @@ class MainActivity : Activity() {
         if (nowPlaying && btMode && !wasPlaying) setBtMode(false)
         wasPlaying = nowPlaying
         if (c == null) {
-            showNoTrack()
+            if (!showBtTrack(sessions)) showNoTrack()
             return
         }
 
@@ -1008,6 +1012,27 @@ class MainActivity : Activity() {
         seek.fraction = if (duration > 0) position.toFloat() / duration else 0f
         positionText.text = fmt(position)
         durationText.text = if (duration > 0) fmt(duration) else "--:--"
+    }
+
+    /** Phone music over the head unit's Bluetooth: title from BtMusic, controls via the KSW session. */
+    private fun showBtTrack(sessions: List<MediaController>): Boolean {
+        val t = btMusic.title ?: return false
+        if (gocBt.connected == false || btMusic.playing == null && System.currentTimeMillis() - btMusic.updated > 15 * 60_000L) return false
+        controller = sessions.firstOrNull { it.packageName == GocBt.PKG }
+        isPlaying = btMusic.playing != false
+        trackTitle.text = t
+        trackArtist.text = "Bluetooth · телефон"
+        playIcon.icon = if (isPlaying) Ico.PAUSE else Ico.PLAY
+        if (lastArt != null) {
+            lastArt = null
+            artImage.setImageBitmap(null)
+            artImage.visibility = View.GONE
+            artPlaceholder.visibility = View.VISIBLE
+        }
+        seek.active = false
+        positionText.text = ""
+        durationText.text = ""
+        return true
     }
 
     private fun showNoTrack() {
@@ -1330,6 +1355,8 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
 
         gocBt = GocBt(this) { refreshBt() }
+        btMusic = BtMusic(this) { refreshMedia(); refreshBt() }
+        btMusic.start()
         appsPage = buildAppsPage()
         autoPage = buildAutoPage()
         dashboard = buildCockpitDashboard()
@@ -1384,6 +1411,7 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         gocBt.stop()
+        btMusic.stop()
         super.onDestroy()
     }
 
