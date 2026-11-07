@@ -78,6 +78,7 @@ class GaugeView(
     private val path = Path()
     private val blurS = BlurMaskFilter(4 * d, BlurMaskFilter.Blur.NORMAL)
     private val blurL = BlurMaskFilter(10 * d, BlurMaskFilter.Blur.NORMAL)
+    private val blurXL = BlurMaskFilter(18 * d, BlurMaskFilter.Blur.NORMAL)
 
     init {
         setLayerType(LAYER_TYPE_SOFTWARE, null) // blur mask filters need a software layer
@@ -105,7 +106,7 @@ class GaugeView(
         val size = min(width, height).toFloat()
         val cx = width / 2f
         val cy = height / 2f
-        val r = size / 2f - 8 * d
+        val r = size / 2f - 16 * d
 
         // Dark face with a faint warm centre.
         p.style = Paint.Style.FILL
@@ -125,14 +126,17 @@ class GaugeView(
         glow.style = Paint.Style.STROKE
         glow.strokeCap = Paint.Cap.ROUND
         glow.maskFilter = blurL
-        glow.strokeWidth = 16 * d
-        glow.color = alphaOf(c("#FF7A1A"), 120)
+        glow.maskFilter = blurXL
+        glow.strokeWidth = 24 * d
+        glow.color = alphaOf(c("#FF7A1A"), 70)
         canvas.drawArc(arc, startAngle, sweep, false, glow)
-        glow.strokeWidth = 7 * d
-        glow.color = alphaOf(c("#FF9A2E"), 200)
+        glow.maskFilter = blurL
+        glow.strokeWidth = 9 * d
+        glow.color = alphaOf(c("#FF9A2E"), 110)
         canvas.drawArc(arc, startAngle, sweep, false, glow)
         p.strokeCap = Paint.Cap.ROUND
-        p.strokeWidth = 3 * d
+        p.strokeWidth = 2.5f * d
+        p.alpha = 220
         p.shader = SweepGradient(cx, cy, intArrayOf(c("#FFB24D"), c("#FF8A1F"), c("#FFC66E"), c("#FFB24D")), null)
         canvas.drawArc(arc, startAngle, sweep, false, p)
         p.shader = null
@@ -194,28 +198,35 @@ class GaugeView(
         canvas.drawText(unit, cx, cy - r * 0.3f, p)
         p.letterSpacing = 0f
 
-        // Needle: thick glowing orange bar from the hub outwards.
+        // Needle: sharp angular wedge with a flat tail, soft glow underneath.
         val na = Math.toRadians(angleFor(shown).toDouble())
         val ca = cos(na).toFloat()
         val sa = sin(na).toFloat()
-        val len = trackR - 16 * d
-        val x0 = cx - ca * 6 * d
-        val y0 = cy - sa * 6 * d
-        val x1 = cx + ca * len
-        val y1 = cy + sa * len
-        glow.style = Paint.Style.STROKE
-        glow.strokeCap = Paint.Cap.ROUND
+        val len = trackR - 14 * d
+        val tail = 12 * d
+        val half = 7.5f * d
+        val tipX = cx + ca * len
+        val tipY = cy + sa * len
+        path.reset()
+        path.moveTo(tipX, tipY)
+        path.lineTo(cx - sa * half, cy + ca * half)
+        path.lineTo(cx - ca * tail - sa * half * 0.6f, cy - sa * tail + ca * half * 0.6f)
+        path.lineTo(cx - ca * tail + sa * half * 0.6f, cy - sa * tail - ca * half * 0.6f)
+        path.lineTo(cx + sa * half, cy - ca * half)
+        path.close()
+        glow.style = Paint.Style.FILL
         glow.maskFilter = blurL
-        glow.strokeWidth = 14 * d
-        glow.color = alphaOf(c("#FF7A1A"), 150)
-        canvas.drawLine(x0, y0, x1, y1, glow)
-        p.style = Paint.Style.STROKE
-        p.strokeCap = Paint.Cap.ROUND
-        p.strokeWidth = 5 * d
-        p.shader = LinearGradient(x0, y0, x1, y1, c("#E06A14"), c("#FFC27A"), Shader.TileMode.CLAMP)
-        canvas.drawLine(x0, y0, x1, y1, p)
+        glow.color = alphaOf(c("#FF7A1A"), 140)
+        canvas.drawPath(path, glow)
+        p.style = Paint.Style.FILL
+        p.shader = LinearGradient(cx, cy, tipX, tipY, c("#D9620F"), c("#FFC27A"), Shader.TileMode.CLAMP)
+        canvas.drawPath(path, p)
         p.shader = null
-        p.strokeCap = Paint.Cap.BUTT
+        // Bright centre ridge for a faceted look.
+        p.style = Paint.Style.STROKE
+        p.strokeWidth = 1 * d
+        p.color = alphaOf(c("#FFE2B8"), 200)
+        canvas.drawLine(cx, cy, tipX, tipY, p)
 
         // Hub.
         p.style = Paint.Style.FILL
