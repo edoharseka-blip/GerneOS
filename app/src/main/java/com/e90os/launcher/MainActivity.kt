@@ -742,8 +742,8 @@ class MainActivity : Activity() {
                 gravity = Gravity.CENTER_VERTICAL
                 if (ic != null) addView(icon(ic, amber, 1.7f), LinearLayout.LayoutParams(24.dp(), 24.dp()).apply { rightMargin = 8.dp() })
                 if (prefix != null) addView(label("$prefix ", 22f, text))
-                addView(label(value, 26f, text, true))
-                addView(label(" $unit", if (unit.length > 3) 14f else 22f, text, unit.length <= 3))
+                addView(label(value, 30f, text, true))
+                addView(label(" $unit", if (unit.length > 3) 15f else 26f, text, unit.length <= 3))
             }, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = 6.dp() })
         }
 
@@ -906,9 +906,9 @@ class MainActivity : Activity() {
 
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(12.dp(), 6.dp(), 12.dp(), 12.dp())
+            setPadding(8.dp(), 2.dp(), 12.dp(), 10.dp())
             addView(gauges, LinearLayout.LayoutParams(MATCH, 0, 1f))
-            addView(bottom, LinearLayout.LayoutParams(MATCH, 104.dp()).apply { topMargin = 8.dp() })
+            addView(bottom, LinearLayout.LayoutParams(MATCH, 100.dp()).apply { topMargin = 4.dp() })
             visibility = View.GONE
         }
     }

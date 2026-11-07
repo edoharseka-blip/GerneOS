@@ -105,45 +105,48 @@ class GaugeView(
         val size = min(width, height).toFloat()
         val cx = width / 2f
         val cy = height / 2f
-        val r = size / 2f - 12 * d
+        val r = size / 2f - 8 * d
 
-        // Soft outer halo.
+        // Dark face with a faint warm centre.
         p.style = Paint.Style.FILL
-        p.shader = RadialGradient(cx, cy, r + 12 * d,
-            intArrayOf(Color.TRANSPARENT, alphaOf(amber, 150), alphaOf(amber, 40), Color.TRANSPARENT),
-            floatArrayOf(0.84f, 0.92f, 0.97f, 1f), Shader.TileMode.CLAMP)
-        canvas.drawCircle(cx, cy, r + 12 * d, p)
-
-        // Bezel: warm metallic sweep.
-        p.shader = SweepGradient(cx, cy,
-            intArrayOf(c("#7A3E0C"), c("#FF9A2E"), c("#B8621A"), c("#FFB04A"), c("#7A3E0C")), null)
+        p.shader = RadialGradient(cx, cy, r,
+            intArrayOf(c("#1A120C"), c("#0C0907"), c("#080605")), floatArrayOf(0f, 0.7f, 1f), Shader.TileMode.CLAMP)
         canvas.drawCircle(cx, cy, r, p)
-
-        // Face.
-        p.shader = RadialGradient(cx, cy - r * 0.2f, r,
-            intArrayOf(c("#1E1610"), c("#0D0A08"), c("#060504")), floatArrayOf(0f, 0.75f, 1f), Shader.TileMode.CLAMP)
-        canvas.drawCircle(cx, cy, r - 4 * d, p)
         p.shader = null
 
-        // Thin glowing rim inside the bezel.
-        glow.style = Paint.Style.STROKE
-        glow.strokeWidth = 4 * d
-        glow.color = alphaOf(amber, 110)
-        glow.maskFilter = blurS
-        canvas.drawCircle(cx, cy, r - 5 * d, glow)
+        // Faint full ring (the part of the bezel outside the scale stays dark).
         p.style = Paint.Style.STROKE
-        p.strokeWidth = 1.2f * d
-        p.color = alphaOf(amberHot, 200)
-        canvas.drawCircle(cx, cy, r - 5 * d, p)
+        p.strokeWidth = 1.5f * d
+        p.color = c("#3A2616")
+        canvas.drawCircle(cx, cy, r, p)
 
-        // Scale track and lit arc up to the current value.
-        val trackR = r - 14 * d
-        arc.set(cx - trackR, cy - trackR, cx + trackR, cy + trackR)
+        // Glowing orange arc along the scale on the outer edge: wide soft halo + bright core.
+        arc.set(cx - r, cy - r, cx + r, cy + r)
+        glow.style = Paint.Style.STROKE
+        glow.strokeCap = Paint.Cap.ROUND
+        glow.maskFilter = blurL
+        glow.strokeWidth = 16 * d
+        glow.color = alphaOf(c("#FF7A1A"), 120)
+        canvas.drawArc(arc, startAngle, sweep, false, glow)
+        glow.strokeWidth = 7 * d
+        glow.color = alphaOf(c("#FF9A2E"), 200)
+        canvas.drawArc(arc, startAngle, sweep, false, glow)
+        p.strokeCap = Paint.Cap.ROUND
         p.strokeWidth = 3 * d
-        p.color = c("#2A1E14")
+        p.shader = SweepGradient(cx, cy, intArrayOf(c("#FFB24D"), c("#FF8A1F"), c("#FFC66E"), c("#FFB24D")), null)
         canvas.drawArc(arc, startAngle, sweep, false, p)
-        if (shown > 0f) arcGlow(canvas, cx, cy, trackR, startAngle, angleFor(shown) - startAngle, amber, 3 * d)
-        if (redFrom != null) arcGlow(canvas, cx, cy, trackR, angleFor(redFrom), angleFor(maxValue) - angleFor(redFrom), red, 4 * d)
+        p.shader = null
+        p.strokeCap = Paint.Cap.BUTT
+
+        // Inner hairline ring.
+        p.strokeWidth = 1 * d
+        p.color = c("#2A1C12")
+        canvas.drawCircle(cx, cy, r - 10 * d, p)
+
+        // Red zone and the lit part of the scale up to the current value.
+        val trackR = r - 10 * d
+        if (shown > 0f) arcGlow(canvas, cx, cy, trackR, startAngle, angleFor(shown) - startAngle, amber, 2.5f * d)
+        if (redFrom != null) arcGlow(canvas, cx, cy, trackR - 2 * d, angleFor(redFrom), angleFor(maxValue) - angleFor(redFrom), red, 5 * d)
 
         // Ticks and labels.
         val minorStep = majorStep / minorPerMajor
@@ -155,7 +158,7 @@ class GaugeView(
             val a = Math.toRadians(angleFor(v).toDouble())
             val ca = cos(a).toFloat()
             val sa = sin(a).toFloat()
-            val outer = trackR - 6 * d
+            val outer = trackR - 3 * d
             val inner = outer - (if (major) 12 else 6) * d
             val hot = redFrom != null && v >= redFrom
             if (major) {
@@ -173,8 +176,8 @@ class GaugeView(
             if (major) {
                 val lr = inner - (if (dense) 12 else 14) * d
                 p.style = Paint.Style.FILL
-                p.textSize = size * (if (dense) 0.05f else 0.07f)
-                p.typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                p.textSize = size * (if (dense) 0.058f else 0.085f)
+                p.typeface = Typeface.create("sans-serif", Typeface.NORMAL)
                 p.color = if (hot) red else labelCol
                 canvas.drawText((v / labelDivider).toInt().toString(), cx + ca * lr, cy + sa * lr + p.textSize / 3, p)
             }
@@ -191,55 +194,53 @@ class GaugeView(
         canvas.drawText(unit, cx, cy - r * 0.3f, p)
         p.letterSpacing = 0f
 
-        // Needle: tapered, with a wide soft glow underneath.
+        // Needle: thick glowing orange bar from the hub outwards.
         val na = Math.toRadians(angleFor(shown).toDouble())
         val ca = cos(na).toFloat()
         val sa = sin(na).toFloat()
-        val len = trackR - 8 * d
-        val tail = 16 * d
-        val half = 3.2f * d
-        path.reset()
-        path.moveTo(cx + ca * len, cy + sa * len)
-        path.lineTo(cx - sa * half - ca * tail, cy + ca * half - sa * tail)
-        path.lineTo(cx + sa * half - ca * tail, cy - ca * half - sa * tail)
-        path.close()
-        glow.style = Paint.Style.FILL
-        glow.color = alphaOf(amber, 170)
+        val len = trackR - 16 * d
+        val x0 = cx - ca * 6 * d
+        val y0 = cy - sa * 6 * d
+        val x1 = cx + ca * len
+        val y1 = cy + sa * len
+        glow.style = Paint.Style.STROKE
+        glow.strokeCap = Paint.Cap.ROUND
         glow.maskFilter = blurL
-        canvas.drawPath(path, glow)
-        p.style = Paint.Style.FILL
-        p.shader = LinearGradient(cx - ca * tail, cy - sa * tail, cx + ca * len, cy + sa * len,
-            c("#B5651A"), c("#FFD08A"), Shader.TileMode.CLAMP)
-        canvas.drawPath(path, p)
+        glow.strokeWidth = 14 * d
+        glow.color = alphaOf(c("#FF7A1A"), 150)
+        canvas.drawLine(x0, y0, x1, y1, glow)
+        p.style = Paint.Style.STROKE
+        p.strokeCap = Paint.Cap.ROUND
+        p.strokeWidth = 5 * d
+        p.shader = LinearGradient(x0, y0, x1, y1, c("#E06A14"), c("#FFC27A"), Shader.TileMode.CLAMP)
+        canvas.drawLine(x0, y0, x1, y1, p)
         p.shader = null
+        p.strokeCap = Paint.Cap.BUTT
 
         // Hub.
-        p.shader = RadialGradient(cx - 3 * d, cy - 3 * d, 13 * d, c("#5A3A1C"), c("#120D09"), Shader.TileMode.CLAMP)
-        canvas.drawCircle(cx, cy, 12 * d, p)
+        p.style = Paint.Style.FILL
+        p.shader = RadialGradient(cx, cy, 11 * d, c("#3A2614"), c("#0E0A07"), Shader.TileMode.CLAMP)
+        canvas.drawCircle(cx, cy, 10 * d, p)
         p.shader = null
-        p.style = Paint.Style.STROKE
-        p.strokeWidth = 1.5f * d
-        p.color = amber
-        canvas.drawCircle(cx, cy, 12 * d, p)
 
         // Digital readout with a soft glow.
         p.style = Paint.Style.FILL
         p.textAlign = Paint.Align.CENTER
-        p.typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
-        p.textSize = size * 0.2f
+        p.typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        p.textSize = size * 0.21f
         glow.style = Paint.Style.FILL
         glow.textAlign = Paint.Align.CENTER
         glow.typeface = p.typeface
         glow.textSize = p.textSize
-        glow.color = alphaOf(amber, 160)
+        glow.color = alphaOf(amber, 90)
         glow.maskFilter = blurL
-        canvas.drawText(readout, cx, cy + r * 0.6f, glow)
-        p.color = c("#FFF1DD")
-        canvas.drawText(readout, cx, cy + r * 0.6f, p)
+        canvas.drawText(readout, cx, cy + r * 0.62f, glow)
+        p.color = c("#FFFFFF")
+        canvas.drawText(readout, cx, cy + r * 0.62f, p)
         p.typeface = Typeface.DEFAULT
         p.textSize = size * 0.045f
         p.color = muted
-        canvas.drawText(caption, cx, cy + r * 0.78f, p)
+        canvas.drawText(caption, cx, cy + r * 0.8f, p)
     }
 }
 
