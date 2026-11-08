@@ -2,6 +2,7 @@ package com.e90os.launcher
 
 import android.os.IBinder
 import android.os.Parcel
+import android.util.Log
 import org.json.JSONObject
 
 /** Values the KSW head unit's MCU decodes from the car's CAN bus. Null = not reported. */
@@ -13,6 +14,12 @@ data class CarState(
     val consumption: Float?,
     val fuel: Int?,
     val handbrake: Boolean?,
+    /** Average speed from the on-board computer, km/h (carData.averSpeed). */
+    val avgSpeed: Float?,
+    /** Door/boot bitmask (carData.carDoor); 0 = all closed. Bit meaning still being mapped on the car. */
+    val doors: Int?,
+    /** carData.safetyBelt as reported by the MCU; polarity not yet confirmed on the car. */
+    val belt: Boolean?,
 )
 
 /**
@@ -82,8 +89,40 @@ object KswCar {
     const val BT_PAUSE = 104
     fun bt(sub: Int) = sendCommand(3, sub)
 
-    fun read(): CarState? {
+    /** Logcat tag for the raw MCU frame: `adb logcat -s E90CAN` gives a full mcuJson dump. */
+    const val LOG_TAG = "E90CAN"
+    private var lastJson: String? = null
+
+    private var dumpThread: android.os.HandlerThread? = null
+
+    /**
+     * Read the MCU frame once a second in the background, so the E90CAN log keeps recording
+     * while another app or the car's own screen is in front (read() logs every change).
+     */
+    fun startDumpLog() {
+        if (dumpThread != null) return
+        val t = android.os.HandlerThread("e90can-dump").apply { start() }
+        dumpThread = t
+        val h = android.os.Handler(t.looper)
+        h.post(object : Runnable {
+            override fun run() {
+                runCatching { read() }
+                h.postDelayed(this, 1000)
+            }
+        })
+    }
+
+    fun stopDumpLog() {
+        dumpThread?.quitSafely()
+        dumpThread = null
+    }
+
+    @Synchronized fun read(): CarState? {
         val json = statusString("mcuJson") ?: return null
+        if (json != lastJson) {
+            lastJson = json
+            Log.i(LOG_TAG, json)
+        }
         return runCatching {
             val car = JSONObject(json).optJSONObject("carData") ?: return null
             fun int(k: String) = if (car.has(k)) car.optInt(k) else null
@@ -96,6 +135,9 @@ object KswCar {
                 consumption = flt("oilWear"),
                 fuel = int("oilSum"),
                 handbrake = if (car.has("handbrake")) car.optBoolean("handbrake") else null,
+                avgSpeed = flt("averSpeed"),
+                doors = int("carDoor"),
+                belt = if (car.has("safetyBelt")) car.optBoolean("safetyBelt") else null,
             )
         }.getOrNull()
     }

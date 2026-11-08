@@ -53,7 +53,8 @@ class GaugeView(
     private fun animateTo(target: Float) {
         anim?.cancel()
         anim = ValueAnimator.ofFloat(shown, target).apply {
-            duration = 450
+            // Short glide: new values arrive up to 20 times a second, the needle must keep up.
+            duration = 70
             interpolator = DecelerateInterpolator()
             addUpdateListener { shown = it.animatedValue as Float; invalidate() }
             start()

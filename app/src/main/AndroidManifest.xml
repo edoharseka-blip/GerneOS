@@ -4,8 +4,15 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.BLUETOOTH" />
+    <!-- Scanning for Bluetooth LE OBD adapters. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+    <!-- Wi-Fi ELM327 OBD adapters talk TCP (usually 192.168.0.10:35000). -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <!-- Granted once over adb; lets the launcher see the Bluetooth song title from the KSW log. -->
     <uses-permission android:name="android.permission.READ_LOGS" />
+
+    <!-- K+DCAN cable / USB ELM327 on the head unit's USB host port. -->
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
 
     <queries>
         <intent>
@@ -33,6 +40,13 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Plugging in a USB OBD adapter lets the user grant permission once ("use by default"). -->
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                android:resource="@xml/usb_obd" />
         </activity>
 
         <service
