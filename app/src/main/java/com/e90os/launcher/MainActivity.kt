@@ -142,6 +142,8 @@ class MainActivity : Activity() {
         canAlive = st != null
         show("outside", st?.outsideTemp?.let { fmt1(it) })
         show("range", st?.range?.takeIf { it > 0 }?.toString())
+        show("fuel", st?.fuel?.takeIf { it > 0 }?.toString())
+        show("avgspeed", st?.avgSpeed?.takeIf { it > 0f }?.let { fmt1(it) })
         show("cons", st?.consumption?.takeIf { it > 0f }?.let { fmt1(it) })
         canSpeed = st?.speed
         show("volt", obd.voltage?.let { fmt1(it) })
@@ -1332,7 +1334,7 @@ class MainActivity : Activity() {
 
         val bottom = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            addView(twoRowCard(barRow(Ico.OIL, "Уровень масла", "— %"), barRow(Ico.BATTERY, "Напряжение АКБ", "— В", "volt", " В")),
+            addView(twoRowCard(barRow(Ico.FUEL, "Топливо в баке", "— л", "fuel", " л"), barRow(Ico.BATTERY, "Напряжение АКБ", "— В", "volt", " В")),
                 LinearLayout.LayoutParams(0, MATCH, 1f))
             addView(route, LinearLayout.LayoutParams(0, MATCH, 1f).apply { leftMargin = 12.dp(); rightMargin = 12.dp() })
             addView(twoRowCard(barRow(Ico.COOLANT, "ОЖ", "— °C", "coolant", " °C"), barRow(Ico.THERMO, "Впуск", "— °C", "intake", " °C")),
@@ -1507,6 +1509,7 @@ class MainActivity : Activity() {
         gocBt.start()
         setBtMode(getPreferences(MODE_PRIVATE).getBoolean("bt_mode", false))
         obd.start(obdTarget())
+        KswCar.startDumpLog()
     }
 
     override fun onResume() {
@@ -1522,6 +1525,7 @@ class MainActivity : Activity() {
         gocBt.stop()
         btMusic.stop()
         obd.stop()
+        KswCar.stopDumpLog()
         super.onDestroy()
     }
 
