@@ -22,3 +22,8 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 }
+
+dependencies {
+    // FTDI / CH340 / PL2303 / CP210x USB serial drivers for K+DCAN and USB ELM327 adapters.
+    implementation("com.github.mik3y:usb-serial-for-android:3.8.0")
+}

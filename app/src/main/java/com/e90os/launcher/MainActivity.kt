@@ -942,6 +942,7 @@ class MainActivity : Activity() {
     private fun obdTargetLabel(t: String?): String = when {
         t == null -> "Не выбран"
         t.startsWith("wifi:") -> "Wi-Fi " + t.removePrefix("wifi:")
+        t == Obd.USB -> "USB (K+DCAN / ELM327)"
         else -> {
             val mac = t.substringAfter(':')
             val name = runCatching { BluetoothAdapter.getDefaultAdapter()?.getRemoteDevice(mac)?.name }.getOrNull() ?: mac
@@ -957,6 +958,7 @@ class MainActivity : Activity() {
         val targets = mutableListOf<String?>(null)
         bonded.forEach { names += "Bluetooth: " + (it.name ?: it.address); targets += "bt:" + it.address }
         names += "Найти Bluetooth LE адаптер (iOS + Android)…"; targets += "scan"
+        names += "USB: K+DCAN или USB ELM327"; targets += Obd.USB
         names += "Wi-Fi ELM327 (192.168.0.10:35000)"; targets += Obd.WIFI_DEFAULT
         names += "Сопрячь новый адаптер…"; targets += "pair"
         AlertDialog.Builder(this)
@@ -1035,9 +1037,9 @@ class MainActivity : Activity() {
         val (obdText, obdColor) = when (obd.state) {
             Obd.State.OFF -> "Выключен" to muted
             Obd.State.CONNECTING -> "Подключение…" to muted
-            Obd.State.NO_ADAPTER -> "Адаптер не отвечает" to "#D9734A"
+            Obd.State.NO_ADAPTER -> (obd.detail.ifBlank { "Адаптер не отвечает" }) to "#D9734A"
             Obd.State.NO_ECU -> "Нет ответа от машины" to "#D9734A"
-            Obd.State.OK -> "Работает" to "#8FBF6A"
+            Obd.State.OK -> (if (obd.detail.isBlank()) "Работает" else "Работает, ${obd.detail}") to "#8FBF6A"
         }
         settingsRow(Ico.CAR, "OBD-адаптер ELM327", obdTargetLabel(obdTarget())) { chooseObd() }
         settingsRow(Ico.SIGNAL, "Статус OBD", obdText, obdColor) { chooseObd() }
@@ -1579,6 +1581,10 @@ class MainActivity : Activity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        if (intent.action == android.hardware.usb.UsbManager.ACTION_USB_DEVICE_ATTACHED) {
+            if (obdTarget() == Obd.USB) obd.restart()
+            return
+        }
         select(TAB_HOME)
     }
 

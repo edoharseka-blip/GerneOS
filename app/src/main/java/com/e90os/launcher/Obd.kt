@@ -26,7 +26,8 @@ import java.util.concurrent.TimeUnit
  * Only standard mode 01 requests and AT commands are sent; nothing is written to the car.
  *
  * Target: "bt:<MAC>" (paired Bluetooth SPP adapter), "ble:<MAC>" (Bluetooth LE adapter, the
- * "iOS + Android" kind) or "wifi:<host>:<port>" (Wi-Fi ELM327).
+ * "iOS + Android" kind), "wifi:<host>:<port>" (Wi-Fi ELM327) or "usb" (K+DCAN cable or USB
+ * ELM327 on the head unit's USB port, see [ObdUsb]).
  * Raw adapter traffic is logged under the tag E90OBD.
  */
 class Obd(private val context: Context, private val onChange: () -> Unit) {
@@ -37,6 +38,7 @@ class Obd(private val context: Context, private val onChange: () -> Unit) {
     companion object {
         const val TAG = "E90OBD"
         const val WIFI_DEFAULT = "wifi:192.168.0.10:35000"
+        const val USB = "usb"
         private val SPP: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
         private const val STALE_MS = 15_000L
         private val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
@@ -90,6 +92,13 @@ class Obd(private val context: Context, private val onChange: () -> Unit) {
         thread = Thread({ loop(newTarget) }, "obd").apply { isDaemon = true; start() }
     }
 
+    /** Reconnect now (e.g. a USB adapter was just plugged in). */
+    @Synchronized fun restart() {
+        val t = target ?: return
+        stop()
+        start(t)
+    }
+
     @Synchronized fun stop() {
         target = null
         runCatching { conn?.close() }
@@ -127,7 +136,8 @@ class Obd(private val context: Context, private val onChange: () -> Unit) {
         }
     }
 
-    private class Io(val input: InputStream, val output: OutputStream, val closer: Closeable) : Closeable {
+    private class Io(val input: InputStream, val output: OutputStream, val closer: Closeable,
+                     val usb: ObdUsb.Port? = null) : Closeable {
         override fun close() = closer.close()
     }
 
@@ -153,6 +163,7 @@ class Obd(private val context: Context, private val onChange: () -> Unit) {
             s.connect(InetSocketAddress(host, port), 5_000)
             Io(s.getInputStream(), s.getOutputStream(), s)
         }
+        t == USB -> ObdUsb.open(app).let { Io(it.input, it.output, it, it) }
         else -> error("неизвестный адаптер: $t")
     }
 
@@ -262,6 +273,62 @@ class Obd(private val context: Context, private val onChange: () -> Unit) {
     }
 
     private fun session(t: String, io: Io) {
+        val usb = io.usb
+        var tag = ""
+        if (usb != null) {
+            // FTDI is most likely the K+DCAN cable: try BMW-FAST first. Other chips are USB ELM327.
+            if (usb.vid == ObdUsb.FTDI_VID && bmwFast(t, usb)) return
+            if (!active(t)) return
+            val baud = listOf(38_400, 115_200, 9_600).firstOrNull { b ->
+                usb.baud(b)
+                cmd(io, "ATZ", 2_000).contains("ELM", ignoreCase = true)
+            }
+            if (baud == null) {
+                if (usb.vid != ObdUsb.FTDI_VID && bmwFast(t, usb)) return
+                error("USB ${usb.name}: ни K+DCAN, ни ELM327 не ответили")
+            }
+            Log.i(TAG, "USB ELM327 at $baud baud")
+            tag = "USB ELM327"
+        }
+        elm(t, io, tag)
+    }
+
+    /**
+     * K+DCAN cable: OBD mode 01 PIDs in BMW-FAST telegrams to the DME (0x12), or the OBD functional
+     * address (0x33) when the DME refuses. Returns false if nothing on the bus answered.
+     */
+    private fun bmwFast(t: String, usb: ObdUsb.Port): Boolean {
+        usb.baud(115_200)
+        // Identification read (service 1A 80) once, only for the log: shows that the DME talks.
+        val ident = ObdUsb.request(usb, 0x12, intArrayOf(0x1A, 0x80), 2_000)
+        var target = 0x12
+        if (ObdUsb.pid(usb, 0x12, 0x00) == null) {
+            if (ObdUsb.pid(usb, 0x33, 0x00) != null) target = 0x33
+            else if (ident == null) return false
+        }
+        Log.i(TAG, "K+DCAN: DME answers, OBD via %02X".format(target))
+        var misses = 0
+        while (active(t)) {
+            val c = ObdUsb.pid(usb, target, 0x05)
+            val i = ObdUsb.pid(usb, target, 0x0F)
+            val v = ObdUsb.pid(usb, target, 0x42)
+            if (c != null) coolantV = c[0] - 40
+            if (i != null) intakeV = i[0] - 40
+            if (v != null && v.size >= 2) voltageV = ((v[0] shl 8) + v[1]) / 1000f
+            updated = System.currentTimeMillis()
+            if (c == null && i == null && v == null) {
+                set(State.NO_ECU, "K+DCAN")
+                if (++misses >= 5) return true
+            } else {
+                misses = 0
+                set(State.OK, "K+DCAN")
+            }
+            Thread.sleep(1_000)
+        }
+        return true
+    }
+
+    private fun elm(t: String, io: Io, tag: String) {
         cmd(io, "ATZ", 5_000)
         for (c in listOf("ATE0", "ATL0", "ATS1", "ATH0", "ATAT1")) cmd(io, c)
         // BMW E90 from 2007 uses D-CAN = ISO 15765-4, 11 bit, 500 kbit/s (protocol 6); fall back to auto.
@@ -280,11 +347,11 @@ class Obd(private val context: Context, private val onChange: () -> Unit) {
             updated = System.currentTimeMillis()
             if (c == null && i == null) {
                 // Adapter answers but the ECU does not: ignition off or wrong protocol.
-                set(State.NO_ECU, "")
+                set(State.NO_ECU, tag)
                 if (++misses >= 5) return
             } else {
                 misses = 0
-                set(State.OK, "")
+                set(State.OK, tag)
             }
             Thread.sleep(2_000)
         }
