@@ -23,3 +23,18 @@ The new home screen uses amber E90 styling, a live MediaSession player and four 
 Vehicle data is deliberately shown as unavailable until a verified CAN/MCU integration exists. The former Android device battery indicator was **not** an accurate measure of the car's 12 V supply.
 
 This source revision has not yet been built or installed on the physical head unit. Test on the emulator first, then use the existing Windows ADB setup to install the debug APK after reviewing it. The launcher has a HOME intent filter, so Android may offer it as a home-screen choice; keep KSW as the default until the new UI has been checked.
+
+## Update the head unit
+
+From the project folder on Windows (PC or laptop), with the head unit on the same Wi-Fi:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\update-headunit.ps1                    # build + install on 192.168.0.22
+powershell -ExecutionPolicy Bypass -File .\tools\update-headunit.ps1 -Ip 192.168.43.120 # other network (phone hotspot)
+powershell -ExecutionPolicy Bypass -File .\tools\update-headunit.ps1 -Check             # environment and connection only
+powershell -ExecutionPolicy Bypass -File .\tools\update-headunit.ps1 -Rollback          # reinstall the previous version
+```
+
+The script backs up the installed APK to `tools\backup\` before installing, never uninstalls and never changes ADB settings. Builds from another machine must use the same `%USERPROFILE%\.android\debug.keystore` as the one that built the installed launcher, otherwise Android rejects the update.
+
+In Claude Code: `/update-headunit [IP] [branch]`. To let Claude run it without prompts, copy `tools\claude-settings\settings.local.json` to `.claude\settings.local.json`.

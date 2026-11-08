@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(powershell -ExecutionPolicy Bypass -File .\\tools\\update-headunit.ps1:*)",
+      "Bash(powershell -ExecutionPolicy Bypass -File .\\tools\\update-headunit.ps1:*)",
+      "Bash(powershell -ExecutionPolicy Bypass -File ./tools/update-headunit.ps1:*)",
+      "Bash(git fetch:*)",
+      "Bash(git pull:*)",
+      "Bash(git status:*)",
+      "Bash(git log:*)"
+    ],
+    "deny": [
+      "Bash(adb tcpip:*)",
+      "Bash(adb usb:*)",
+      "Bash(adb reboot:*)",
+      "Bash(adb uninstall:*)",
+      "Bash(adb shell pm uninstall:*)",
+      "Bash(adb shell pm clear:*)",
+      "Bash(adb shell settings put:*)"
+    ]
+  }
+}
