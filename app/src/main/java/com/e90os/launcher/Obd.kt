@@ -29,9 +29,10 @@ import java.util.concurrent.TimeUnit
  * "iOS + Android" kind) or "wifi:<host>:<port>" (Wi-Fi ELM327).
  * Raw adapter traffic is logged under the tag E90OBD.
  */
-class Obd(context: Context, private val onChange: () -> Unit) {
+class Obd(private val context: Context, private val onChange: () -> Unit) {
 
-    private val app = context.applicationContext
+    // Resolved on use: Obd is created as an Activity field, before the Activity has a base context.
+    private val app: Context get() = context.applicationContext
 
     companion object {
         const val TAG = "E90OBD"
