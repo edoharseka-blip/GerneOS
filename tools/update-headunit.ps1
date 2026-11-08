@@ -114,7 +114,7 @@ function StartAndVerify {
         Write-Host (& $adb -s $Serial logcat -d -t 80 AndroidRuntime:E '*:S' | Out-String)
         Fail "лаунчер не запустился (выше лог падения). Откат: .\tools\update-headunit.ps1 -Rollback -Ip $Ip"
     }
-    Ok "лаунчер запущен (pid $($procId.Trim))"
+    Ok "лаунчер запущен (pid $($procId.Trim()))"
     Ok "версия: $(InstalledVersion)"
 }
 
