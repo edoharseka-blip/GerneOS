@@ -185,11 +185,11 @@ class MainActivity : Activity() {
         updateSpeed()
     }
 
-    /** Speed and RPM poll 10 times a second while the Авто tab is open; the rest stays on the 1 s tick. */
+    /** Speed and RPM poll 20 times a second while the Авто tab is open; the rest stays on the 1 s tick. */
     private val fastTick = object : Runnable {
         override fun run() {
             if (currentTab == TAB_AUTO) applyGauges(KswCar.read())
-            handler.postDelayed(this, 100)
+            handler.postDelayed(this, 50)
         }
     }
 
