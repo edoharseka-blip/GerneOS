@@ -153,16 +153,44 @@ class MainActivity : Activity() {
         bars["fuel"]?.forEach { it.fraction = fuel?.let { l -> l / TANK_LITRES } }
         show("avgspeed", st?.avgSpeed?.takeIf { it > 0f }?.let { fmt1(it) })
         show("cons", st?.consumption?.takeIf { it > 0f }?.let { fmt1(it) })
-        canSpeed = st?.speed
+        applyGauges(st)
         show("volt", obd.voltage?.let { fmt1(it) })
         show("coolant", obd.coolant?.toString())
         show("intake", obd.intake?.toString())
-        rpmGauge.value = st?.rpm?.toFloat()
-        rpmGauge.readout = st?.rpm?.let { String.format(Locale("ru"), "%.1f", it / 1000f) } ?: "—"
-        rpmGauge.caption = if (st != null) "CAN" else "CAN: нет данных"
         canChips.forEach { it.setTextColor(rgb(if (canAlive) "#8FBF6A" else "#D9734A")) }
         updateSpeed()
         refreshRoute()
+    }
+
+    private val doorLabels = mutableListOf<TextView>()
+
+    /** carData.carDoor bits, mapped on the car 2026-11-08: 0x10 driver, 0x20 front passenger, 0x80 rear left, 0x40 rear right. */
+    private fun showDoors(mask: Int?) {
+        val open = listOf(0x10 to "водительская", 0x20 to "пассажирская", 0x80 to "задняя левая", 0x40 to "задняя правая")
+            .filter { mask != null && mask and it.first != 0 }.map { it.second }
+        val (txt, color) = when {
+            mask == null -> "" to muted
+            open.isEmpty() -> "Двери закрыты" to muted
+            else -> ("Открыта: " + open.joinToString(", ")) to "#D9734A"
+        }
+        doorLabels.forEach { it.text = txt; it.setTextColor(rgb(color)) }
+    }
+
+    private fun applyGauges(st: CarState?) {
+        showDoors(st?.doors)
+        canSpeed = st?.speed
+        rpmGauge.value = st?.rpm?.toFloat()
+        rpmGauge.readout = st?.rpm?.let { String.format(Locale("ru"), "%.1f", it / 1000f) } ?: "—"
+        rpmGauge.caption = if (st != null) "CAN" else "CAN: нет данных"
+        updateSpeed()
+    }
+
+    /** Speed and RPM poll 10 times a second while the Авто tab is open; the rest stays on the 1 s tick. */
+    private val fastTick = object : Runnable {
+        override fun run() {
+            if (currentTab == TAB_AUTO) applyGauges(KswCar.read())
+            handler.postDelayed(this, 100)
+        }
     }
 
     private fun updateSpeed() {
@@ -1300,6 +1328,8 @@ class MainActivity : Activity() {
             addView(centerMetric("Запас хода", "—", "км", ic = Ico.FUEL, key = "range"))
             addView(FadeLine(this@MainActivity, rgb("#5A4430")), LinearLayout.LayoutParams(MATCH, 1.dp()).apply { topMargin = 12.dp(); bottomMargin = 12.dp() })
             addView(centerMetric("Расход", "—", "л/100 км", prefix = "Ø", key = "cons"))
+            addView(label("", 13f, muted, true).apply { gravity = Gravity.CENTER; doorLabels += this },
+                LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = 10.dp() })
         }
 
         val gauges = LinearLayout(this).apply {
@@ -1527,6 +1557,8 @@ class MainActivity : Activity() {
         if (currentTab == TAB_SETTINGS) buildSettingsBody()
         handler.removeCallbacks(tick)
         handler.post(tick)
+        handler.removeCallbacks(fastTick)
+        handler.post(fastTick)
         if (currentTab == TAB_AUTO) startGps()
     }
 
@@ -1541,6 +1573,7 @@ class MainActivity : Activity() {
     override fun onPause() {
         super.onPause()
         handler.removeCallbacks(tick)
+        handler.removeCallbacks(fastTick)
         stopGps()
     }
 
