@@ -71,6 +71,8 @@ class MainActivity : Activity() {
     private val navDefaults = listOf("ru.yandex.yandexnavi", "com.google.android.apps.maps")
 
     // Tabs
+    /** BMW E90 fuel tank capacity, litres. */
+    private val TANK_LITRES = 63f
     private val TAB_HOME = 0
     private val TAB_MUSIC = 1
     private val TAB_MAP = 2
@@ -118,6 +120,10 @@ class MainActivity : Activity() {
         if (key != null) bound.getOrPut(key) { mutableListOf() }.add(tv to suffix)
         return tv
     }
+    /** Segment bars that live data fills, by key ("fuel", ...). */
+    private val bars = mutableMapOf<String, MutableList<SegmentBar>>()
+    private fun bar(key: String, b: SegmentBar): SegmentBar { bars.getOrPut(key) { mutableListOf() }.add(b); return b }
+
     private fun show(key: String, value: String?) {
         bound[key]?.forEach { (tv, suffix) -> tv.text = (value ?: "—") + suffix }
     }
@@ -142,7 +148,9 @@ class MainActivity : Activity() {
         canAlive = st != null
         show("outside", st?.outsideTemp?.let { fmt1(it) })
         show("range", st?.range?.takeIf { it > 0 }?.toString())
-        show("fuel", st?.fuel?.takeIf { it > 0 }?.toString())
+        val fuel = st?.fuel?.takeIf { it > 0 }
+        show("fuel", fuel?.toString())
+        bars["fuel"]?.forEach { it.fraction = fuel?.let { l -> l / TANK_LITRES } }
         show("avgspeed", st?.avgSpeed?.takeIf { it > 0f }?.let { fmt1(it) })
         show("cons", st?.consumption?.takeIf { it > 0f }?.let { fmt1(it) })
         canSpeed = st?.speed
@@ -481,14 +489,14 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(16.dp(), 6.dp(), 18.dp(), 6.dp())
-            addView(icon(Ico.OIL, amber, 1.6f), LinearLayout.LayoutParams(46.dp(), 46.dp()).apply { rightMargin = 16.dp() })
+            addView(icon(Ico.FUEL, amber, 1.6f), LinearLayout.LayoutParams(46.dp(), 46.dp()).apply { rightMargin = 16.dp() })
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL
-                addView(label("Уровень масла", 15f, soft))
-                addView(SegmentBar(this@MainActivity, 6), LinearLayout.LayoutParams(MATCH, 12.dp()).apply { topMargin = 8.dp() })
+                addView(label("Топливо в баке", 15f, soft))
+                addView(bar("fuel", SegmentBar(this@MainActivity, 10)), LinearLayout.LayoutParams(MATCH, 12.dp()).apply { topMargin = 8.dp() })
             }, LinearLayout.LayoutParams(0, WRAP, 1f))
             addView(hLine(edgeHi), LinearLayout.LayoutParams(1.dp(), 26.dp()).apply { leftMargin = 16.dp(); rightMargin = 16.dp() })
-            addView(label("—", 18f, amber, true))
+            addView(bind("fuel", label("— л", 18f, amber, true), " л"))
         }
         addView(oil, LinearLayout.LayoutParams(MATCH, 0, 0.8f).apply { topMargin = 8.dp() })
 
@@ -1264,7 +1272,8 @@ class MainActivity : Activity() {
         addView(LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.VERTICAL
             addView(label(name, 13f, soft).oneLine())
-            addView(SegmentBar(this@MainActivity, 6), LinearLayout.LayoutParams(MATCH, 6.dp()).apply { topMargin = 5.dp() })
+            val sb = SegmentBar(this@MainActivity, 6)
+            addView(if (key == "fuel") bar(key, sb) else sb, LinearLayout.LayoutParams(MATCH, 6.dp()).apply { topMargin = 5.dp() })
         }, LinearLayout.LayoutParams(0, WRAP, 1f))
         addView(bind(key, label(value, 15f, text, true).apply { gravity = Gravity.END }, suffix),
             LinearLayout.LayoutParams(64.dp(), WRAP).apply { leftMargin = 10.dp() })
