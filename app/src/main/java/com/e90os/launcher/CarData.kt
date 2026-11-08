@@ -2,6 +2,7 @@ package com.e90os.launcher
 
 import android.os.IBinder
 import android.os.Parcel
+import android.util.Log
 import org.json.JSONObject
 
 /** Values the KSW head unit's MCU decodes from the car's CAN bus. Null = not reported. */
@@ -82,8 +83,16 @@ object KswCar {
     const val BT_PAUSE = 104
     fun bt(sub: Int) = sendCommand(3, sub)
 
+    /** Logcat tag for the raw MCU frame: `adb logcat -s E90CAN` gives a full mcuJson dump. */
+    const val LOG_TAG = "E90CAN"
+    private var lastJson: String? = null
+
     fun read(): CarState? {
         val json = statusString("mcuJson") ?: return null
+        if (json != lastJson) {
+            lastJson = json
+            Log.i(LOG_TAG, json)
+        }
         return runCatching {
             val car = JSONObject(json).optJSONObject("carData") ?: return null
             fun int(k: String) = if (car.has(k)) car.optInt(k) else null

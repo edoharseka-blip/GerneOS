@@ -130,6 +130,10 @@ class MainActivity : Activity() {
     private var canAlive = false
     private val canChips = mutableListOf<TextView>()
 
+    /** ELM327 OBD adapter for coolant, intake and voltage (the KSW MCU does not report them). */
+    private val obd = Obd { handler.post { if (currentTab == TAB_SETTINGS) buildSettingsBody() } }
+    private fun obdTarget(): String? = getPreferences(MODE_PRIVATE).getString("obd_target", null)
+
     private fun fmt1(v: Float) = String.format(Locale("ru"), "%.1f", v)
 
     /** Pull the latest CAN frame from the KSW service and push it into every bound label. */
@@ -140,6 +144,9 @@ class MainActivity : Activity() {
         show("range", st?.range?.takeIf { it > 0 }?.toString())
         show("cons", st?.consumption?.takeIf { it > 0f }?.let { fmt1(it) })
         canSpeed = st?.speed
+        show("volt", obd.voltage?.let { fmt1(it) })
+        show("coolant", obd.coolant?.toString())
+        show("intake", obd.intake?.toString())
         rpmGauge.value = st?.rpm?.toFloat()
         rpmGauge.readout = st?.rpm?.let { String.format(Locale("ru"), "%.1f", it / 1000f) } ?: "—"
         rpmGauge.caption = if (st != null) "CAN" else "CAN: нет данных"
@@ -465,7 +472,7 @@ class MainActivity : Activity() {
             setOnClickListener { select(TAB_AUTO) }
         }, LinearLayout.LayoutParams(MATCH, 34.dp()))
 
-        addView(pair(valueCard(Ico.BATTERY, "Напряжение", "—", "В"), valueCard(Ico.COOLANT, "Температура ОЖ", "—", "°C")),
+        addView(pair(valueCard(Ico.BATTERY, "Напряжение", "—", "В", "volt"), valueCard(Ico.COOLANT, "Температура ОЖ", "—", "°C", "coolant")),
             LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = 8.dp() })
 
         val oil = card().apply {
@@ -894,6 +901,38 @@ class MainActivity : Activity() {
         settingsBody.addView(row, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = 6.dp() })
     }
 
+    private fun obdTargetLabel(t: String?): String = when {
+        t == null -> "Не выбран"
+        t.startsWith("wifi:") -> "Wi-Fi " + t.removePrefix("wifi:")
+        else -> runCatching {
+            BluetoothAdapter.getDefaultAdapter()?.getRemoteDevice(t.removePrefix("bt:"))?.name
+        }.getOrNull() ?: t.removePrefix("bt:")
+    }
+
+    /** Pick the OBD adapter: a paired Bluetooth device, a Wi-Fi ELM327, or off. */
+    private fun chooseObd() {
+        val bonded = runCatching { BluetoothAdapter.getDefaultAdapter()?.bondedDevices?.toList() }
+            .getOrNull().orEmpty().sortedBy { it.name ?: it.address }
+        val names = mutableListOf("Выключен")
+        val targets = mutableListOf<String?>(null)
+        bonded.forEach { names += "Bluetooth: " + (it.name ?: it.address); targets += "bt:" + it.address }
+        names += "Wi-Fi ELM327 (192.168.0.10:35000)"; targets += Obd.WIFI_DEFAULT
+        names += "Сопрячь новый адаптер…"; targets += "pair"
+        AlertDialog.Builder(this)
+            .setTitle(if (bonded.isEmpty()) "OBD-адаптер (сопряжённых нет)" else "OBD-адаптер")
+            .setItems(names.toTypedArray()) { _, i ->
+                val t = targets[i]
+                if (t == "pair") {
+                    runCatching { startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }
+                    return@setItems
+                }
+                getPreferences(MODE_PRIVATE).edit().putString("obd_target", t).apply()
+                obd.start(t)
+                buildSettingsBody()
+            }
+            .show()
+    }
+
     private fun buildSettingsBody() {
         settingsBody.removeAllViews()
         settingsBody.addView(label("Настройки", 24f, text, true))
@@ -912,6 +951,17 @@ class MainActivity : Activity() {
         val access = hasNotificationAccess()
         settingsRow(Ico.MUSIC, "Доступ к музыке", if (access) "Разрешён" else "Не разрешён",
             if (access) "#8FBF6A" else "#D9734A") { openNotificationAccess() }
+
+        settingsSection("Автомобиль")
+        val (obdText, obdColor) = when (obd.state) {
+            Obd.State.OFF -> "Выключен" to muted
+            Obd.State.CONNECTING -> "Подключение…" to muted
+            Obd.State.NO_ADAPTER -> "Адаптер не отвечает" to "#D9734A"
+            Obd.State.NO_ECU -> "Нет ответа от машины" to "#D9734A"
+            Obd.State.OK -> "Работает" to "#8FBF6A"
+        }
+        settingsRow(Ico.CAR, "OBD-адаптер ELM327", obdTargetLabel(obdTarget())) { chooseObd() }
+        settingsRow(Ico.SIGNAL, "Статус OBD", obdText, obdColor) { chooseObd() }
 
         settingsSection("Система")
         settingsRow(Ico.HOME, "Лаунчер по умолчанию", "") {
@@ -1164,7 +1214,7 @@ class MainActivity : Activity() {
     }
 
     /** Icon, name with a segmented bar under it, value on the right. */
-    private fun barRow(ic: Ico, name: String, value: String): LinearLayout = LinearLayout(this).apply {
+    private fun barRow(ic: Ico, name: String, value: String, key: String? = null, suffix: String = ""): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
         addView(icon(ic, amber, 1.6f), LinearLayout.LayoutParams(30.dp(), 30.dp()).apply { rightMargin = 12.dp() })
@@ -1173,7 +1223,7 @@ class MainActivity : Activity() {
             addView(label(name, 13f, soft).oneLine())
             addView(SegmentBar(this@MainActivity, 6), LinearLayout.LayoutParams(MATCH, 6.dp()).apply { topMargin = 5.dp() })
         }, LinearLayout.LayoutParams(0, WRAP, 1f))
-        addView(label(value, 15f, text, true).apply { gravity = Gravity.END },
+        addView(bind(key, label(value, 15f, text, true).apply { gravity = Gravity.END }, suffix),
             LinearLayout.LayoutParams(64.dp(), WRAP).apply { leftMargin = 10.dp() })
     }
 
@@ -1241,10 +1291,10 @@ class MainActivity : Activity() {
 
         val bottom = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            addView(twoRowCard(barRow(Ico.OIL, "Уровень масла", "— %"), barRow(Ico.BATTERY, "Напряжение АКБ", "— В")),
+            addView(twoRowCard(barRow(Ico.OIL, "Уровень масла", "— %"), barRow(Ico.BATTERY, "Напряжение АКБ", "— В", "volt", " В")),
                 LinearLayout.LayoutParams(0, MATCH, 1f))
             addView(route, LinearLayout.LayoutParams(0, MATCH, 1f).apply { leftMargin = 12.dp(); rightMargin = 12.dp() })
-            addView(twoRowCard(barRow(Ico.COOLANT, "ОЖ", "— °C"), barRow(Ico.THERMO, "Впуск", "— °C")),
+            addView(twoRowCard(barRow(Ico.COOLANT, "ОЖ", "— °C", "coolant", " °C"), barRow(Ico.THERMO, "Впуск", "— °C", "intake", " °C")),
                 LinearLayout.LayoutParams(0, MATCH, 1f))
         }
 
@@ -1415,6 +1465,7 @@ class MainActivity : Activity() {
         select(TAB_HOME)
         gocBt.start()
         setBtMode(getPreferences(MODE_PRIVATE).getBoolean("bt_mode", false))
+        obd.start(obdTarget())
     }
 
     override fun onResume() {
@@ -1429,6 +1480,7 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         gocBt.stop()
         btMusic.stop()
+        obd.stop()
         super.onDestroy()
     }
 
