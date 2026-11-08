@@ -1,7 +1,14 @@
 package com.e90os.launcher
 
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothGatt
+import android.bluetooth.BluetoothGattCallback
+import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattDescriptor
+import android.bluetooth.BluetoothProfile
 import android.bluetooth.BluetoothSocket
+import android.content.Context
 import android.util.Log
 import java.io.Closeable
 import java.io.InputStream
@@ -9,22 +16,32 @@ import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 
 /**
  * Read-only ELM327 OBD-II reader for values the KSW MCU does not report:
  * coolant (PID 05), intake air (PID 0F) and supply voltage (ATRV).
  * Only standard mode 01 requests and AT commands are sent; nothing is written to the car.
  *
- * Target: "bt:<MAC>" (paired Bluetooth SPP adapter) or "wifi:<host>:<port>" (Wi-Fi ELM327).
+ * Target: "bt:<MAC>" (paired Bluetooth SPP adapter), "ble:<MAC>" (Bluetooth LE adapter, the
+ * "iOS + Android" kind) or "wifi:<host>:<port>" (Wi-Fi ELM327).
  * Raw adapter traffic is logged under the tag E90OBD.
  */
-class Obd(private val onChange: () -> Unit) {
+class Obd(context: Context, private val onChange: () -> Unit) {
+
+    private val app = context.applicationContext
 
     companion object {
         const val TAG = "E90OBD"
         const val WIFI_DEFAULT = "wifi:192.168.0.10:35000"
         private val SPP: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
         private const val STALE_MS = 15_000L
+        private val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+        /** Serial-over-BLE services used by ELM327 clones (FFF0, FFE0, 18F0), preferred in this order. */
+        private val BLE_SERVICES = listOf("fff0", "ffe0", "18f0")
+        private const val EOF_BYTE: Byte = -1
 
         /** "41 05 7B" → [0x41, 0x05, 0x7B]; skips echo, "SEARCHING..." and other text lines. */
         fun pidBytes(reply: String, pid: Int): IntArray? {
@@ -126,6 +143,7 @@ class Obd(private val onChange: () -> Unit) {
             }
             Io(sock.inputStream, sock.outputStream, sock)
         }
+        t.startsWith("ble:") -> openBle(t.removePrefix("ble:"))
         t.startsWith("wifi:") -> {
             val hp = t.removePrefix("wifi:")
             val host = hp.substringBeforeLast(':')
@@ -135,6 +153,90 @@ class Obd(private val onChange: () -> Unit) {
             Io(s.getInputStream(), s.getOutputStream(), s)
         }
         else -> error("неизвестный адаптер: $t")
+    }
+
+    /** ELM327 over a BLE GATT "serial" characteristic pair (notify in, write out). */
+    private fun openBle(mac: String): Io {
+        val adapter = BluetoothAdapter.getDefaultAdapter() ?: error("нет Bluetooth в Android")
+        if (!adapter.isEnabled) error("Bluetooth выключен")
+        val dev = adapter.getRemoteDevice(mac)
+        val rx = LinkedBlockingQueue<Byte>()
+        val ready = CountDownLatch(1)
+        val written = java.util.concurrent.Semaphore(0)
+        var failure: String? = null
+        var tx: BluetoothGattCharacteristic? = null
+
+        fun shortId(u: UUID) = u.toString().substring(4, 8)
+
+        val cb = object : BluetoothGattCallback() {
+            override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
+                if (newState == BluetoothProfile.STATE_CONNECTED) g.discoverServices()
+                else { failure = "BLE отключился ($status)"; ready.countDown(); written.release(); rx.offer(EOF_BYTE) }
+            }
+            override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
+                val services = g.services.sortedBy { sv ->
+                    BLE_SERVICES.indexOf(shortId(sv.uuid)).let { if (it < 0) 99 else it }
+                }
+                for (sv in services) {
+                    val chars = sv.characteristics
+                    val notify = chars.firstOrNull { it.properties and BluetoothGattCharacteristic.PROPERTY_NOTIFY != 0 }
+                    val write = chars.firstOrNull {
+                        it.properties and (BluetoothGattCharacteristic.PROPERTY_WRITE or
+                            BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE) != 0
+                    }
+                    if (notify == null || write == null) continue
+                    Log.i(TAG, "BLE service ${sv.uuid}: notify ${notify.uuid}, write ${write.uuid}")
+                    tx = write
+                    g.setCharacteristicNotification(notify, true)
+                    val d = notify.getDescriptor(CCCD)
+                    if (d != null) {
+                        d.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                        if (g.writeDescriptor(d)) return
+                    }
+                    ready.countDown()
+                    return
+                }
+                failure = "у адаптера нет последовательного BLE-канала"
+                ready.countDown()
+            }
+            override fun onDescriptorWrite(g: BluetoothGatt, d: BluetoothGattDescriptor, status: Int) { ready.countDown() }
+            override fun onCharacteristicChanged(g: BluetoothGatt, c: BluetoothGattCharacteristic) {
+                c.value?.forEach { rx.offer(it) }
+            }
+            override fun onCharacteristicWrite(g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int) { written.release() }
+        }
+
+        val gatt = dev.connectGatt(app, false, cb, BluetoothDevice.TRANSPORT_LE) ?: error("BLE не подключается")
+        val close = Closeable { runCatching { gatt.disconnect() }; runCatching { gatt.close() }; rx.offer(EOF_BYTE) }
+        if (!ready.await(15, TimeUnit.SECONDS) || failure != null) {
+            close.close()
+            error(failure ?: "BLE-адаптер не ответил")
+        }
+        val out = tx!!
+        var closed = false
+        val input = object : InputStream() {
+            override fun read(): Int {
+                if (closed) return -1
+                val b = rx.take()
+                if (b == EOF_BYTE && (closed || failure != null)) return -1
+                return b.toInt() and 0xFF
+            }
+            override fun available(): Int = rx.size
+        }
+        val output = object : OutputStream() {
+            private val buf = java.io.ByteArrayOutputStream()
+            override fun write(b: Int) { buf.write(b) }
+            override fun flush() {
+                val all = buf.toByteArray(); buf.reset()
+                for (i in all.indices step 20) {
+                    out.value = all.copyOfRange(i, minOf(i + 20, all.size))
+                    if (!gatt.writeCharacteristic(out)) error("BLE: запись не прошла")
+                    written.tryAcquire(1, TimeUnit.SECONDS)
+                    if (failure != null) error(failure!!)
+                }
+            }
+        }
+        return Io(input, output, Closeable { closed = true; close.close() })
     }
 
     private fun cmd(io: Io, c: String, timeoutMs: Long = 3_000L): String {

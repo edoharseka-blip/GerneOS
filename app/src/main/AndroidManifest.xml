@@ -4,6 +4,8 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.BLUETOOTH" />
+    <!-- Scanning for Bluetooth LE OBD adapters. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
     <!-- Wi-Fi ELM327 OBD adapters talk TCP (usually 192.168.0.10:35000). -->
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Granted once over adb; lets the launcher see the Bluetooth song title from the KSW log. -->

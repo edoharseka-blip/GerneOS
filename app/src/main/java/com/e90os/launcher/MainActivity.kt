@@ -131,7 +131,7 @@ class MainActivity : Activity() {
     private val canChips = mutableListOf<TextView>()
 
     /** ELM327 OBD adapter for coolant, intake and voltage (the KSW MCU does not report them). */
-    private val obd = Obd { handler.post { if (currentTab == TAB_SETTINGS) buildSettingsBody() } }
+    private val obd = Obd(this) { handler.post { if (currentTab == TAB_SETTINGS) buildSettingsBody() } }
     private fun obdTarget(): String? = getPreferences(MODE_PRIVATE).getString("obd_target", null)
 
     private fun fmt1(v: Float) = String.format(Locale("ru"), "%.1f", v)
@@ -904,9 +904,11 @@ class MainActivity : Activity() {
     private fun obdTargetLabel(t: String?): String = when {
         t == null -> "Не выбран"
         t.startsWith("wifi:") -> "Wi-Fi " + t.removePrefix("wifi:")
-        else -> runCatching {
-            BluetoothAdapter.getDefaultAdapter()?.getRemoteDevice(t.removePrefix("bt:"))?.name
-        }.getOrNull() ?: t.removePrefix("bt:")
+        else -> {
+            val mac = t.substringAfter(':')
+            val name = runCatching { BluetoothAdapter.getDefaultAdapter()?.getRemoteDevice(mac)?.name }.getOrNull() ?: mac
+            if (t.startsWith("ble:")) "$name (BLE)" else name
+        }
     }
 
     /** Pick the OBD adapter: a paired Bluetooth device, a Wi-Fi ELM327, or off. */
@@ -916,12 +918,14 @@ class MainActivity : Activity() {
         val names = mutableListOf("Выключен")
         val targets = mutableListOf<String?>(null)
         bonded.forEach { names += "Bluetooth: " + (it.name ?: it.address); targets += "bt:" + it.address }
+        names += "Найти Bluetooth LE адаптер (iOS + Android)…"; targets += "scan"
         names += "Wi-Fi ELM327 (192.168.0.10:35000)"; targets += Obd.WIFI_DEFAULT
         names += "Сопрячь новый адаптер…"; targets += "pair"
         AlertDialog.Builder(this)
             .setTitle(if (bonded.isEmpty()) "OBD-адаптер (сопряжённых нет)" else "OBD-адаптер")
             .setItems(names.toTypedArray()) { _, i ->
                 val t = targets[i]
+                if (t == "scan") { scanBleObd(); return@setItems }
                 if (t == "pair") {
                     runCatching { startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }
                     return@setItems
@@ -931,6 +935,43 @@ class MainActivity : Activity() {
                 buildSettingsBody()
             }
             .show()
+    }
+
+    /** Scan 6 s for BLE devices and let the user pick the OBD adapter among them. */
+    private fun scanBleObd() {
+        val adapter = BluetoothAdapter.getDefaultAdapter()
+        val scanner = adapter?.takeIf { it.isEnabled }?.bluetoothLeScanner
+        if (scanner == null) { Toast.makeText(this, "Bluetooth выключен или недоступен", Toast.LENGTH_LONG).show(); return }
+        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), 7)
+            Toast.makeText(this, "Нужно разрешение на геолокацию для поиска BLE, затем повторите", Toast.LENGTH_LONG).show()
+            return
+        }
+        val found = linkedMapOf<String, String>()
+        val cb = object : android.bluetooth.le.ScanCallback() {
+            override fun onScanResult(type: Int, r: android.bluetooth.le.ScanResult) {
+                val name = r.device.name ?: r.scanRecord?.deviceName ?: return
+                found[r.device.address] = name
+            }
+        }
+        val wait = AlertDialog.Builder(this).setTitle("Поиск BLE-адаптера…")
+            .setMessage("Вставьте сканер в OBD-разъём и включите зажигание.").setCancelable(false).show()
+        runCatching { scanner.startScan(cb) }.onFailure { wait.dismiss(); Toast.makeText(this, "Поиск BLE не запустился", Toast.LENGTH_LONG).show(); return }
+        handler.postDelayed({
+            runCatching { scanner.stopScan(cb) }
+            wait.dismiss()
+            if (found.isEmpty()) { Toast.makeText(this, "BLE-адаптер не найден", Toast.LENGTH_LONG).show(); return@postDelayed }
+            val list = found.entries.sortedByDescending { e ->
+                listOf("OBD", "ELM", "LINK", "SCAN", "VEEPEAK", "IOS").any { e.value.uppercase().contains(it) }
+            }
+            AlertDialog.Builder(this).setTitle("BLE-адаптер")
+                .setItems(list.map { "${it.value}  ${it.key}" }.toTypedArray()) { _, i ->
+                    val t = "ble:" + list[i].key
+                    getPreferences(MODE_PRIVATE).edit().putString("obd_target", t).apply()
+                    obd.start(t)
+                    buildSettingsBody()
+                }.show()
+        }, 6_000)
     }
 
     private fun buildSettingsBody() {
